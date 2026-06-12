@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Callable, Sequence
@@ -10,8 +11,7 @@ from typing import Callable, Sequence
 import pandas as pd
 import requests
 
-from tradingagents.dataflows.config import get_config
-from tradingagents.dataflows.symbol_utils import NoMarketDataError, parse_crypto_pair
+from tradingagents.dataflows.symbol_utils import CryptoPair, NoMarketDataError, parse_crypto_pair
 
 from .validation import BacktestDataError
 
@@ -167,7 +167,37 @@ def _fetch_cryptocompare_ohlcv(
     return _slice_window(df, start_dt, end_dt)
 
 
-def _fetch_ccxt_ohlcv(
+_DEFAULT_CCXT_EXCHANGES = ("kraken", "coinbase", "binance")
+
+
+def _ccxt_exchange_ids() -> tuple[str, ...]:
+    raw = os.environ.get("BACKTEST_CCXT_EXCHANGES", "").strip()
+    if raw:
+        return tuple(x.strip().lower() for x in raw.split(",") if x.strip())
+    return _DEFAULT_CCXT_EXCHANGES
+
+
+def _ccxt_market_symbol(exchange, pair: CryptoPair) -> str | None:
+    """Resolve a ccxt unified symbol for an exchange (e.g. BTC/USD on Coinbase)."""
+    candidates: list[str] = []
+    if pair.quote in ("USDT", "USDC", "BUSD"):
+        # USD pairs usually have deeper intraday history on Kraken/Coinbase.
+        candidates.append(f"{pair.base}/USD")
+    candidates.append(pair.display)
+    if pair.quote == "USD":
+        candidates.append(f"{pair.base}/USDT")
+    seen: set[str] = set()
+    for sym in candidates:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        if sym in exchange.markets:
+            return sym
+    return None
+
+
+def _fetch_ccxt_ohlcv_from_exchange(
+    exchange_id: str,
     symbol: str,
     start_dt: datetime,
     end_dt: datetime,
@@ -182,12 +212,29 @@ def _fetch_ccxt_ohlcv(
             "ccxt not installed (pip install ccxt)",
         ) from exc
 
-    exchange = ccxt.binance({"enableRateLimit": True})
+    pair = parse_crypto_pair(symbol)
+    if not hasattr(ccxt, exchange_id):
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"unknown ccxt exchange {exchange_id!r}",
+        )
+
+    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    exchange.load_markets()
+    market_symbol = _ccxt_market_symbol(exchange, pair)
+    if not market_symbol:
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"{exchange_id} has no market for {pair.display}",
+        )
+
     since_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
     rows: list = []
     while since_ms < end_ms:
-        batch = exchange.fetch_ohlcv(symbol, interval, since=since_ms, limit=1000)
+        batch = exchange.fetch_ohlcv(market_symbol, interval, since=since_ms, limit=1000)
         if not batch:
             break
         rows.extend(batch)
@@ -199,8 +246,8 @@ def _fetch_ccxt_ohlcv(
     if not rows:
         raise NoMarketDataError(
             symbol,
-            parse_crypto_pair(symbol).display,
-            f"ccxt Binance returned no {interval} candles",
+            pair.display,
+            f"ccxt {exchange_id} returned no {interval} candles",
         )
 
     df = pd.DataFrame(
@@ -214,6 +261,27 @@ def _fetch_ccxt_ohlcv(
     return _slice_window(df, start_dt, end_dt)
 
 
+def _fetch_ccxt_ohlcv(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    interval: str,
+) -> pd.DataFrame:
+    pair_display = parse_crypto_pair(symbol).display
+    errors: list[str] = []
+    for exchange_id in _ccxt_exchange_ids():
+        try:
+            return _fetch_ccxt_ohlcv_from_exchange(
+                exchange_id, symbol, start_dt, end_dt, interval
+            )
+        except NoMarketDataError as exc:
+            errors.append(f"{exchange_id}: {exc.detail or exc}")
+        except Exception as exc:
+            errors.append(f"{exchange_id}: {exc}")
+    detail = "; ".join(errors) or "no ccxt exchange returned candles"
+    raise NoMarketDataError(symbol, pair_display, detail)
+
+
 def fetch_intraday_ohlcv(
     symbol: str,
     start_dt: datetime,
@@ -223,19 +291,16 @@ def fetch_intraday_ohlcv(
     live_mode: bool = False,
     config: dict | None = None,
 ) -> pd.DataFrame:
-    """Fetch OHLCV for a backtest window via Binance → CryptoCompare → ccxt."""
+    """Fetch OHLCV for a backtest window via CryptoCompare → Binance → ccxt."""
     if granularity_seconds not in _VENDOR_SPECS:
         raise BacktestDataError(
             f"Unsupported candle granularity {granularity_seconds}s for backtest OHLCV."
         )
 
-    cfg = config or get_config()
-    if live_mode or cfg.get("live_mode"):
-        live_mode = True
-
     binance_interval, cc_endpoint, resample_rule = _VENDOR_SPECS[granularity_seconds]
     pair_display = parse_crypto_pair(symbol).display
     errors: list[str] = []
+    ccxt_label = "ccxt (" + ", ".join(_ccxt_exchange_ids()) + ")"
 
     vendors: Sequence[tuple[str, Callable[[], pd.DataFrame]]] = [
         (
@@ -248,14 +313,11 @@ def fetch_intraday_ohlcv(
             "Binance",
             lambda: _fetch_binance_ohlcv(symbol, start_dt, end_dt, binance_interval),
         ),
+        (
+            ccxt_label,
+            lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
+        ),
     ]
-    if live_mode:
-        vendors = list(vendors) + [
-            (
-                "ccxt Binance",
-                lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
-            ),
-        ]
 
     for name, fetcher in vendors:
         try:
@@ -277,7 +339,8 @@ def fetch_intraday_ohlcv(
     hints = [
         "Check network connectivity and API keys (CRYPTOCOMPARE_API_KEY).",
         "Try a more recent end date or a liquid pair (e.g. BTC/USDT).",
-        "Use --live to enable ccxt Binance fallback when direct APIs are geo-blocked.",
+        "ccxt fallbacks try Kraken/Coinbase/Binance — set BACKTEST_CCXT_EXCHANGES to reorder.",
+        "If Binance returns HTTP 451, disable VPN or use exchanges allowed in your region.",
         "If the analysis date is today, end time is capped to now — use yesterday or wait for more history.",
     ]
     raise BacktestDataError(

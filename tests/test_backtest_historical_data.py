@@ -64,6 +64,9 @@ class TestBacktestHistoricalData:
         ), patch(
             "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
             side_effect=Exception("451 blocked"),
+        ), patch(
+            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv",
+            side_effect=Exception("ccxt unavailable"),
         ):
             with pytest.raises(BacktestDataError, match="Could not load intraday OHLCV"):
                 fetch_intraday_ohlcv(
@@ -72,6 +75,27 @@ class TestBacktestHistoricalData:
                     pd.Timestamp("2026-06-01 08:00").to_pydatetime(),
                     300,
                 )
+
+    def test_fetch_intraday_ohlcv_falls_back_to_ccxt(self):
+        df = _sample_ohlcv(96)
+        with patch(
+            "tradingagents.backtest.historical_data._fetch_cryptocompare_ohlcv",
+            side_effect=Exception("HTTP 429"),
+        ), patch(
+            "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
+            side_effect=Exception("451 blocked"),
+        ), patch(
+            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv",
+            return_value=df,
+        ) as mock_ccxt:
+            out = fetch_intraday_ohlcv(
+                "BTC/USDT",
+                pd.Timestamp("2026-06-01 00:00").to_pydatetime(),
+                pd.Timestamp("2026-06-01 08:00").to_pydatetime(),
+                300,
+            )
+        mock_ccxt.assert_called_once()
+        assert len(out) == 96
 
     def test_optimize_with_mocked_ohlcv_produces_thirty_results(self):
         df = _sample_ohlcv(120)
