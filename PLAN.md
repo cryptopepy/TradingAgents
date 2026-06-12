@@ -73,12 +73,12 @@ Atomic commits per phase: `feat/P{n}-*: ...` — do not bundle phases.
 - [x] P1-6: Tests — `test_backtest_validation.py`, post-analysis table/menu updates
 
 ### Phase 2 — Live Market Feed Integration (`feat/P2-*`)
-- [ ] P2-1: Unified router `tradingagents/dataflows/live_feed.py` (wrap/refactor `live_prices.py`)
-- [ ] P2-2: Parse `COINGECKO_API_KEY`, `CRYPTOCOMPARE_API_KEY` from env
-- [ ] P2-3: CoinGecko — metadata, circulating supply, global market cap
-- [ ] P2-4: CryptoCompare — minute/hourly REST tickers (WebSocket if feasible)
-- [ ] P2-5: Resilient 429/network fallback — localized mock ticker from last anchor
-- [ ] P2-6: Tests — `test_live_feed.py` fallback and vendor routing
+- [x] P2-1: Unified router `tradingagents/dataflows/live_feed.py` (wrap/refactor `live_prices.py`)
+- [x] P2-2: Parse `COINGECKO_API_KEY`, `CRYPTOCOMPARE_API_KEY` from env
+- [x] P2-3: CoinGecko — metadata, circulating supply, global market cap
+- [x] P2-4: CryptoCompare — minute/hourly REST tickers (WebSocket if feasible)
+- [x] P2-5: Resilient 429/network fallback — localized mock ticker from last anchor
+- [x] P2-6: Tests — `test_live_feed.py` fallback and vendor routing
 
 ### Phase 3 — High-Fidelity Paper Trading (`feat/P3-*`)
 - [ ] P3-1: `VirtualPortfolio` in `simulator/core.py` — cash ($100k default), long/short margin, slippage, fees

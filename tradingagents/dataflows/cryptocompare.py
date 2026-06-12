@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Annotated
 
 import pandas as pd
+import requests
 
 from .crypto_common import env_api_key, http_get_json, no_data_message
 from .date_window import article_date_in_range
@@ -38,6 +39,11 @@ def fetch_spot_price(symbol: str) -> float | None:
         )
         price = data.get(tsym)
         return float(price) if price is not None else None
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            raise
+        logger.debug("CryptoCompare spot price failed for %s: %s", symbol, exc)
+        return None
     except Exception as exc:
         logger.debug("CryptoCompare spot price failed for %s: %s", symbol, exc)
         return None
