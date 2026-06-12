@@ -1,14 +1,39 @@
 # TradingAgents/graph/setup.py
 
-from typing import Any, Dict
+import threading
+from typing import Any, Callable, Dict, List
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.types import Send
 
 from tradingagents.agents import *
 from tradingagents.agents.utils.agent_states import AgentState
+from tradingagents.risk.guard import create_risk_guard_node
 
-from .analyst_execution import build_analyst_execution_plan
+from .analyst_execution import AnalystExecutionPlan, build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
+
+
+def _wrap_with_semaphore(fn: Callable, semaphore: threading.Semaphore) -> Callable:
+    """Limit concurrent analyst LLM invocations."""
+
+    def wrapped(state):
+        with semaphore:
+            return fn(state)
+
+    return wrapped
+
+
+def create_analyst_join_node():
+    """Fan-in barrier after parallel analyst branches; reset messages for research."""
+
+    clear_messages = create_msg_delete()
+
+    def analyst_join_node(state):
+        return clear_messages(state)
+
+    return analyst_join_node
 
 
 class GraphSetup:
@@ -21,13 +46,20 @@ class GraphSetup:
         tool_nodes: Dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
         analyst_concurrency_limit: int = 1,
+        risk_config: Dict[str, Any] | None = None,
     ):
         """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
-        self.analyst_concurrency_limit = analyst_concurrency_limit
+        self.analyst_concurrency_limit = max(1, analyst_concurrency_limit)
+        self.risk_config = risk_config or {}
+        self._analyst_semaphore = threading.Semaphore(self.analyst_concurrency_limit)
+
+    def _schedule_analysts(self, state: AgentState, plan: AnalystExecutionPlan) -> List[Send]:
+        """Fan-out from START to each selected analyst in parallel."""
+        return [Send(spec.agent_node, state) for spec in plan.specs]
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -64,15 +96,21 @@ class GraphSetup:
         neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
         conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
         portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+        risk_guard_node = create_risk_guard_node(self.risk_config)
 
         # Create workflow
         workflow = StateGraph(AgentState)
 
-        # Add analyst nodes to the graph
+        # Add analyst nodes to the graph (semaphore-limited)
         for spec in plan.specs:
-            workflow.add_node(spec.agent_node, analyst_factories[spec.key]())
+            workflow.add_node(
+                spec.agent_node,
+                _wrap_with_semaphore(analyst_factories[spec.key](), self._analyst_semaphore),
+            )
             workflow.add_node(spec.clear_node, create_msg_delete())
             workflow.add_node(spec.tool_node, self.tool_nodes[spec.key])
+
+        workflow.add_node("Analyst Join", create_analyst_join_node())
 
         # Add other nodes
         workflow.add_node("Bull Researcher", bull_researcher_node)
@@ -83,30 +121,25 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
+        workflow.add_node("Risk Guard", risk_guard_node)
 
-        # Define edges
-        # Start with the first analyst
-        workflow.add_edge(START, plan.specs[0].agent_node)
+        # Parallel fan-out from START to all selected analysts
+        workflow.add_conditional_edges(
+            START,
+            lambda state: self._schedule_analysts(state, plan),
+        )
 
-        # Connect analysts in sequence
-        for i, spec in enumerate(plan.specs):
-            current_analyst = spec.agent_node
-            current_tools = spec.tool_node
-            current_clear = spec.clear_node
-
-            # Add conditional edges for current analyst
+        # Per-analyst tool loops; each branch fans in at Analyst Join
+        for spec in plan.specs:
             workflow.add_conditional_edges(
-                current_analyst,
+                spec.agent_node,
                 getattr(self.conditional_logic, f"should_continue_{spec.key}"),
-                [current_tools, current_clear],
+                [spec.tool_node, spec.clear_node],
             )
-            workflow.add_edge(current_tools, current_analyst)
+            workflow.add_edge(spec.tool_node, spec.agent_node)
+            workflow.add_edge(spec.clear_node, "Analyst Join")
 
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
-            if i < len(plan.specs) - 1:
-                workflow.add_edge(current_clear, plan.specs[i + 1].agent_node)
-            else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+        workflow.add_edge("Analyst Join", "Bull Researcher")
 
         # Add remaining edges
         workflow.add_conditional_edges(
@@ -152,6 +185,7 @@ class GraphSetup:
             },
         )
 
-        workflow.add_edge("Portfolio Manager", END)
+        workflow.add_edge("Portfolio Manager", "Risk Guard")
+        workflow.add_edge("Risk Guard", END)
 
         return workflow

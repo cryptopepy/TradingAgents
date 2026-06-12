@@ -123,6 +123,7 @@ def sync_analyst_tracker_from_chunk(
     tracker: AnalystWallTimeTracker,
     chunk: Dict[str, str],
     now: Optional[float] = None,
+    parallel: bool = False,
 ) -> None:
     current_time = monotonic() if now is None else now
     active_found = False
@@ -135,6 +136,7 @@ def sync_analyst_tracker_from_chunk(
             tracker.mark_completed(spec.key, completed_at=current_time)
             continue
 
-        if not active_found:
+        if parallel or not active_found:
             tracker.mark_started(spec.key, started_at=current_time)
-            active_found = True
+            if not parallel:
+                active_found = True

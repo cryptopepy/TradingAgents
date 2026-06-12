@@ -27,6 +27,43 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+# Markdown keys downstream parsers expect when structured output falls back to prose.
+_FALLBACK_MARKERS: dict[str, tuple[str, ...]] = {
+    "Portfolio Manager": (
+        "**Rating**:",
+        "**Executive Summary**:",
+        "**Investment Thesis**:",
+    ),
+    "Trader": (
+        "**Action**:",
+        "**Reasoning**:",
+        "FINAL TRANSACTION PROPOSAL:",
+    ),
+    "Research Manager": (
+        "**Recommendation**:",
+        "**Rationale**:",
+        "**Strategic Actions**:",
+    ),
+    "Sentiment Analyst": (
+        "**Overall Sentiment:**",
+        "**Confidence:**",
+    ),
+}
+
+
+def _append_fallback_markers(text: str, agent_name: str) -> str:
+    """Ensure free-text fallback includes markdown keys parsers rely on."""
+    markers = _FALLBACK_MARKERS.get(agent_name)
+    if not markers:
+        return text
+    suffix_lines = []
+    for marker in markers:
+        if marker.lower() not in text.lower():
+            suffix_lines.append(f"{marker} (unstructured fallback — see narrative above)")
+    if not suffix_lines:
+        return text
+    return text.rstrip() + "\n\n" + "\n".join(suffix_lines)
+
 
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Optional[Any]:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
@@ -70,4 +107,5 @@ def invoke_structured_or_freetext(
             )
 
     response = plain_llm.invoke(prompt)
-    return response.content
+    content = response.content if hasattr(response, "content") else str(response)
+    return _append_fallback_markers(content, agent_name)

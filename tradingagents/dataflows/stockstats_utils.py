@@ -1,12 +1,15 @@
+import socket
 import time
 import logging
 
 import pandas as pd
+import requests
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 from stockstats import wrap
 from typing import Annotated
 import os
+from urllib.error import URLError
 from .config import get_config
 from .utils import safe_ticker_component
 from .symbol_utils import normalize_symbol, NoMarketDataError
@@ -14,20 +17,56 @@ from .symbol_utils import normalize_symbol, NoMarketDataError
 logger = logging.getLogger(__name__)
 
 
-def yf_retry(func, max_retries=3, base_delay=2.0):
-    """Execute a yfinance call with exponential backoff on rate limits.
+def _is_retryable_http_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", 0) >= 500:
+        return True
+    return False
 
-    yfinance raises YFRateLimitError on HTTP 429 responses but does not
-    retry them internally. This wrapper adds retry logic specifically
-    for rate limits. Other exceptions propagate immediately.
+
+def yf_retry(func, max_retries=3, base_delay=2.0):
+    """Execute a yfinance call with exponential backoff on transient failures.
+
+    Retries on Yahoo rate limits (HTTP 429), socket timeouts, connection drops,
+    URLError, and HTTP 5xx responses from the underlying requests session.
     """
+    retryable = (
+        YFRateLimitError,
+        socket.timeout,
+        TimeoutError,
+        ConnectionError,
+        ConnectionResetError,
+        URLError,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    )
     for attempt in range(max_retries + 1):
         try:
             return func()
-        except YFRateLimitError:
+        except retryable as exc:
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)
-                logger.warning(f"Yahoo Finance rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})")
+                logger.warning(
+                    "Yahoo Finance transient error (%s), retrying in %.0fs "
+                    "(attempt %d/%d)",
+                    type(exc).__name__,
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                time.sleep(delay)
+            else:
+                raise
+        except requests.HTTPError as exc:
+            if _is_retryable_http_error(exc) and attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Yahoo Finance HTTP %s, retrying in %.0fs (attempt %d/%d)",
+                    getattr(exc.response, "status_code", "?"),
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
                 time.sleep(delay)
             else:
                 raise
@@ -125,17 +164,39 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     return data
 
 
-def filter_financials_by_date(data: pd.DataFrame, curr_date: str) -> pd.DataFrame:
-    """Drop financial statement columns (fiscal period timestamps) after curr_date.
+def _financial_publication_lag_days(data: pd.DataFrame, statement_type: str = "auto") -> int:
+    """Return SEC filing publication lag in days (45 for 10-Q, 90 for 10-K)."""
+    if statement_type == "quarterly":
+        return 45
+    if statement_type == "annual":
+        return 90
+    col_dates = pd.to_datetime(data.columns, errors="coerce")
+    valid_dates = col_dates.dropna().sort_values()
+    if len(valid_dates) >= 2:
+        median_gap = valid_dates.diff().dropna().median()
+        if pd.notna(median_gap) and median_gap.days < 120:
+            return 45
+    return 90
+
+
+def filter_financials_by_date(
+    data: pd.DataFrame,
+    curr_date: str,
+    statement_type: str = "auto",
+) -> pd.DataFrame:
+    """Drop financial statement columns not yet public as of ``curr_date``.
 
     yfinance financial statements use fiscal period end dates as columns.
-    Columns after curr_date represent future data and are removed to
-    prevent look-ahead bias.
+    A publication lag is applied before filtering (45 days for quarterly
+    10-Q filings, 90 days for annual 10-K) so fiscal periods whose filings
+    would not yet be available are excluded, preventing look-ahead bias.
     """
     if not curr_date or data.empty:
         return data
-    cutoff = pd.Timestamp(curr_date)
-    mask = pd.to_datetime(data.columns, errors="coerce") <= cutoff
+    lag_days = _financial_publication_lag_days(data, statement_type)
+    cutoff = pd.Timestamp(curr_date) - pd.Timedelta(days=lag_days)
+    col_dates = pd.to_datetime(data.columns, errors="coerce")
+    mask = col_dates.isna() | (col_dates <= cutoff)
     return data.loc[:, mask]
 
 

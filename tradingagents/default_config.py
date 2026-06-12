@@ -80,7 +80,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
-    "analyst_concurrency_limit": 1,
+    "analyst_concurrency_limit": 4,
+    # Programmatic risk guard (post-PM veto layer)
+    "max_stop_atr_multiple": 3.0,
+    "max_position_pct": 10.0,
+    "max_var_pct": 5.0,
+    "max_concentration_pct": 15.0,
+    "assumed_daily_vol_pct": 2.0,
     # News / data fetching parameters
     # Increase for longer lookback strategies or to broaden macro coverage;
     # decrease to reduce token usage in agent prompts.

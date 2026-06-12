@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Callable, Dict, Any, Tuple, List, Optional
 
 import yfinance as yf
 
@@ -117,6 +117,13 @@ class TradingAgentsGraph:
             self.tool_nodes,
             self.conditional_logic,
             analyst_concurrency_limit=self.config.get("analyst_concurrency_limit", 1),
+            risk_config={
+                "max_stop_atr_multiple": self.config.get("max_stop_atr_multiple", 3.0),
+                "max_position_pct": self.config.get("max_position_pct", 10.0),
+                "max_var_pct": self.config.get("max_var_pct", 5.0),
+                "max_concentration_pct": self.config.get("max_concentration_pct", 15.0),
+                "assumed_daily_vol_pct": self.config.get("assumed_daily_vol_pct", 2.0),
+            },
         )
 
         self.propagator = Propagator(
@@ -313,7 +320,14 @@ class TradingAgentsGraph:
         identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock"):
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        asset_type: str = "stock",
+        stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        callbacks: Optional[List] = None,
+    ):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -322,6 +336,10 @@ class TradingAgentsGraph:
         ``checkpoint_enabled`` is set in config, the graph is recompiled with
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+
+        ``stream_callback`` receives each streamed state chunk (``stream_mode``
+        ``values``) for Rich TUI or other live consumers. ``callbacks`` are
+        forwarded to the graph config for tool-execution tracking.
         """
         self.ticker = company_name
 
@@ -347,14 +365,27 @@ class TradingAgentsGraph:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            return self._run_graph(
+                company_name,
+                trade_date,
+                asset_type=asset_type,
+                stream_callback=stream_callback,
+                callbacks=callbacks,
+            )
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
+    def _run_graph(
+        self,
+        company_name,
+        trade_date,
+        asset_type: str = "stock",
+        stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        callbacks: Optional[List] = None,
+    ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
@@ -367,23 +398,25 @@ class TradingAgentsGraph:
             past_context=past_context,
             instrument_context=instrument_context,
         )
-        args = self.propagator.get_graph_args()
+        effective_callbacks = callbacks if callbacks is not None else self.callbacks
+        args = self.propagator.get_graph_args(callbacks=effective_callbacks or None)
 
         # Inject thread_id so same ticker+date resumes, different date starts fresh.
         if self.config.get("checkpoint_enabled"):
             tid = thread_id(company_name, str(trade_date))
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
-        if self.debug:
+        use_stream = self.debug or stream_callback is not None
+        if use_stream:
             trace = []
             for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
+                if self.debug and chunk.get("messages"):
                     chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
+                if stream_callback is not None:
+                    stream_callback(chunk)
+                trace.append(chunk)
             # Streamed chunks are per-node deltas. Merge them so the returned
-            # state matches what graph.invoke() yields in the non-debug path.
+            # state matches what graph.invoke() yields in the non-stream path.
             final_state = {}
             for chunk in trace:
                 final_state.update(chunk)

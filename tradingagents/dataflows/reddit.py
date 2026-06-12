@@ -29,6 +29,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .sentiment_pit import NO_HISTORICAL_SENTIMENT_DATA, is_historical_trade_date
+
 logger = logging.getLogger(__name__)
 
 _API = "https://www.reddit.com/r/{sub}/search.json?{qs}"
@@ -143,13 +145,20 @@ def fetch_reddit_posts(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 0.4,
+    trade_date: Optional[str] = None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
 
     ``inter_request_delay`` keeps us under Reddit's public rate limit
     (~10 req/min per IP) even if the caller queries many subreddits.
+
+    When ``trade_date`` is before yesterday, live Reddit data would
+    introduce look-ahead bias; ``NO_HISTORICAL_SENTIMENT_DATA`` is returned.
     """
+    if trade_date and is_historical_trade_date(trade_date):
+        return NO_HISTORICAL_SENTIMENT_DATA
+
     blocks = []
     total_posts = 0
     for i, sub in enumerate(subreddits):

@@ -25,7 +25,6 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
-    get_initial_analyst_node,
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -869,22 +868,21 @@ ANALYST_REPORT_MAP = {
 }
 
 
-def update_analyst_statuses(message_buffer, chunk, wall_time_tracker=None):
+def update_analyst_statuses(message_buffer, chunk, wall_time_tracker=None, parallel=False):
     """Update analyst statuses based on accumulated report state.
 
     Logic:
     - Store new report content from the current chunk if present
     - Check accumulated report_sections (not just current chunk) for status
     - Analysts with reports = completed
-    - First analyst without report = in_progress
-    - Remaining analysts without reports = pending
+    - Without reports: in_progress (all pending when ``parallel`` else first only)
     - When all analysts done, set Bull Researcher to in_progress
     """
     selected = message_buffer.selected_analysts
-    found_active = False
+    pending_analysts = []
 
     if wall_time_tracker is not None:
-        sync_analyst_tracker_from_chunk(wall_time_tracker, chunk)
+        sync_analyst_tracker_from_chunk(wall_time_tracker, chunk, parallel=parallel)
 
     for analyst_key in ANALYST_ORDER:
         if analyst_key not in selected:
@@ -902,14 +900,17 @@ def update_analyst_statuses(message_buffer, chunk, wall_time_tracker=None):
 
         if has_report:
             message_buffer.update_agent_status(agent_name, "completed")
-        elif not found_active:
+        else:
+            pending_analysts.append((analyst_key, agent_name))
+
+    for idx, (analyst_key, agent_name) in enumerate(pending_analysts):
+        if parallel or idx == 0:
             message_buffer.update_agent_status(agent_name, "in_progress")
-            found_active = True
         else:
             message_buffer.update_agent_status(agent_name, "pending")
 
     # When all analysts complete, transition research team to in_progress
-    if not found_active and selected:
+    if not pending_analysts and selected:
         if message_buffer.agent_status.get("Bull Researcher") == "pending":
             message_buffer.update_agent_status("Bull Researcher", "in_progress")
 
@@ -1101,10 +1102,11 @@ def run_analysis(checkpoint: bool = False):
         )
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
-        # Update agent status to in_progress for the first analyst
-        first_analyst = get_initial_analyst_node(analyst_execution_plan)
-        message_buffer.update_agent_status(first_analyst, "in_progress")
-        analyst_wall_time_tracker.mark_started(selected_analyst_keys[0])
+        parallel_analysts = config.get("analyst_concurrency_limit", 1) > 1
+        for analyst_key in selected_analyst_keys:
+            agent_name = ANALYST_AGENT_NAMES[analyst_key]
+            message_buffer.update_agent_status(agent_name, "in_progress")
+            analyst_wall_time_tracker.mark_started(analyst_key)
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
         # Create spinner text
@@ -1113,26 +1115,7 @@ def run_analysis(checkpoint: bool = False):
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
-        # Initialize state and get graph args with callbacks.
-        # Resolve the instrument identity once here so all agents anchor to
-        # the real company (#814); the CLI builds state directly rather than
-        # going through propagate(), so this must happen on the CLI path too.
-        instrument_context = graph.resolve_instrument_context(
-            selections["ticker"], selections["asset_type"]
-        )
-        init_agent_state = graph.propagator.create_initial_state(
-            selections["ticker"],
-            selections["analysis_date"],
-            asset_type=selections["asset_type"],
-            instrument_context=instrument_context,
-        )
-        # Pass callbacks to graph config for tool execution tracking
-        # (LLM tracking is handled separately via LLM constructor)
-        args = graph.propagator.get_graph_args(callbacks=[stats_handler])
-
-        # Stream the analysis
-        trace = []
-        for chunk in graph.graph.stream(init_agent_state, **args):
+        def process_stream_chunk(chunk):
             # Process all messages in chunk, deduplicating by message ID
             for message in chunk.get("messages", []):
                 msg_id = getattr(message, "id", None)
@@ -1152,21 +1135,19 @@ def run_analysis(checkpoint: bool = False):
                         else:
                             message_buffer.add_tool_call(tool_call.name, tool_call.args)
 
-            # Update analyst statuses based on report state (runs on every chunk)
             update_analyst_statuses(
                 message_buffer,
                 chunk,
                 wall_time_tracker=analyst_wall_time_tracker,
+                parallel=parallel_analysts,
             )
 
-            # Research Team - Handle Investment Debate State
             if chunk.get("investment_debate_state"):
                 debate_state = chunk["investment_debate_state"]
                 bull_hist = debate_state.get("bull_history", "").strip()
                 bear_hist = debate_state.get("bear_history", "").strip()
                 judge = debate_state.get("judge_decision", "").strip()
 
-                # Only update status when there's actual content
                 if bull_hist or bear_hist:
                     update_research_team_status("in_progress")
                 if bull_hist:
@@ -1184,7 +1165,6 @@ def run_analysis(checkpoint: bool = False):
                     update_research_team_status("completed")
                     message_buffer.update_agent_status("Trader", "in_progress")
 
-            # Trading Team
             if chunk.get("trader_investment_plan"):
                 message_buffer.update_report_section(
                     "trader_investment_plan", chunk["trader_investment_plan"]
@@ -1193,7 +1173,6 @@ def run_analysis(checkpoint: bool = False):
                     message_buffer.update_agent_status("Trader", "completed")
                     message_buffer.update_agent_status("Aggressive Analyst", "in_progress")
 
-            # Risk Management Team - Handle Risk Debate State
             if chunk.get("risk_debate_state"):
                 risk_state = chunk["risk_debate_state"]
                 agg_hist = risk_state.get("aggressive_history", "").strip()
@@ -1230,17 +1209,15 @@ def run_analysis(checkpoint: bool = False):
                         message_buffer.update_agent_status("Neutral Analyst", "completed")
                         message_buffer.update_agent_status("Portfolio Manager", "completed")
 
-            # Update the display
             update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
-            trace.append(chunk)
-
-        # Streamed chunks are per-node deltas, not full state. Merge them
-        # so every report field populated across the run is present.
-        final_state = {}
-        for chunk in trace:
-            final_state.update(chunk)
-        decision = graph.process_signal(final_state["final_trade_decision"])
+        final_state, decision = graph.propagate(
+            selections["ticker"],
+            selections["analysis_date"],
+            asset_type=selections["asset_type"],
+            stream_callback=process_stream_chunk,
+            callbacks=[stats_handler],
+        )
 
         # Update all agent statuses to completed
         for agent in message_buffer.agent_status:
