@@ -111,6 +111,7 @@ def run_backtest_with_progress(
     stop_loss_pct: float = 0.02,
     transaction_cost_pct: float = 0.001,
     strategies: Optional[Sequence] = None,
+    config: Optional[dict] = None,
 ) -> OptimizationResult:
     """Run optimize_strategies with a Rich progress bar (zero LLM tokens)."""
     strategies = list(strategies or DEFAULT_STRATEGIES)
@@ -141,6 +142,7 @@ def run_backtest_with_progress(
             transaction_cost_pct=transaction_cost_pct,
             lookbacks=lookbacks,
             on_metric=_advance,
+            config=config,
         )
 
     return require_optimization_results(result)

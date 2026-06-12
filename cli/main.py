@@ -1395,14 +1395,19 @@ def backtest_cmd(
             lookbacks=list(params.lookbacks),
             stop_loss_pct=params.stop_loss_pct,
             transaction_cost_pct=params.transaction_cost_pct,
+            config=config,
         )
         optimization = deploy_winning_strategy(optimization, config)
         summary = format_optimization_summary(optimization)
     except BacktestValidationError as exc:
-        console.print(f"[red]Backtest validation error:[/red]\n{exc}")
+        console.print(f"[red]Backtest error:[/red]\n{exc}")
         raise typer.Exit(1) from exc
     except Exception as exc:
-        console.print(f"[red]Backtest failed: {exc}[/red]")
+        import traceback
+
+        console.print(f"[red]Backtest failed:[/red] {exc}")
+        if os.environ.get("TRADINGAGENTS_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            console.print(traceback.format_exc())
         raise typer.Exit(1) from exc
 
     console.print(Panel(Markdown(summary), title="Backtest Optimization", border_style="cyan"))

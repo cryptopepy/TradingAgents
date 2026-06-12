@@ -26,6 +26,7 @@ from .portfolio import (
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, build_strategy
 from .validation import (
+    BacktestDataError,
     BacktestValidationError,
     require_optimization_results,
     validate_end_date,
@@ -34,6 +35,7 @@ from .validation import (
 
 __all__ = [
     "BacktestResult",
+    "BacktestDataError",
     "BacktestValidationError",
     "DEFAULT_STRATEGIES",
     "Direction",

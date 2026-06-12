@@ -13,6 +13,10 @@ class BacktestValidationError(ValueError):
     """Raised when backtest inputs or outputs are invalid."""
 
 
+class BacktestDataError(BacktestValidationError):
+    """Raised when historical OHLCV cannot be loaded for backtesting."""
+
+
 def validate_ticker(ticker: str) -> str:
     """Normalize and validate a crypto pair string."""
     if not ticker or not str(ticker).strip():
@@ -71,9 +75,10 @@ def require_optimization_results(result: OptimizationResult) -> OptimizationResu
             [
                 "",
                 "Common causes:",
-                "  • Historic-Crypto could not fetch Coinbase candles (network/API)",
+                "  • CryptoCompare/Binance/ccxt could not fetch intraday candles",
                 "  • Lookback window returned fewer than 30 bars",
                 "  • Invalid or illiquid pair for the selected end date",
+                "  • Geo-blocked Binance API (try --live for ccxt fallback)",
             ]
         )
     raise BacktestValidationError("\n".join(lines))

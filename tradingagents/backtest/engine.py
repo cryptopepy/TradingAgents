@@ -1,6 +1,6 @@
 """Mathematical strategy backtesting engine (no LLM).
 
-Fetches intraday crypto history via Historic-Crypto (Coinbase candles),
+Fetches intraday crypto history via CryptoCompare / Binance / ccxt,
 caches CSV locally, runs pure-code strategies across 8h/24h/7d horizons,
 and optionally bridges the winning parameters to a live or dummy price feed.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -23,10 +24,12 @@ from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.symbol_utils import parse_crypto_pair
 
+from .historical_data import fetch_intraday_ohlcv
 from .matcher import SimulatedMatcher
 from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_to_intents
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
+from .validation import BacktestDataError
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +144,19 @@ def _normalize_historic_df(raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _cache_covers_range(cached: pd.DataFrame, start: datetime, end: datetime) -> bool:
+def _cache_covers_range(
+    cached: pd.DataFrame,
+    start: datetime,
+    end: datetime,
+    *,
+    min_bars: int = 30,
+) -> bool:
+    """True when cached rows cover the window with enough bars for a backtest."""
     if cached.empty:
         return False
+    mask = (cached["Date"] >= pd.Timestamp(start)) & (cached["Date"] <= pd.Timestamp(end))
+    if mask.sum() >= min_bars:
+        return True
     dates = pd.to_datetime(cached["Date"])
     return dates.min() <= start and dates.max() >= end - timedelta(minutes=5)
 
@@ -154,8 +167,9 @@ def fetch_historical_crypto(
     lookback: LookbackWindow,
     *,
     force_refresh: bool = False,
+    config: Optional[dict] = None,
 ) -> pd.DataFrame:
-    """Load OHLCV via Historic-Crypto with local CSV cache."""
+    """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks."""
     ticker = _historic_ticker(symbol)
     granularity = lookback.granularity_seconds()
     end_dt = pd.to_datetime(end_date).to_pydatetime().replace(
@@ -175,24 +189,22 @@ def fetch_historical_crypto(
             return cached.loc[mask].reset_index(drop=True)
         logger.info("Cache incomplete for %s — refetching", cache_file.name)
 
-    try:
-        from Historic_Crypto import HistoricalData
-    except ImportError as exc:
-        raise ImportError(
-            "Historic-Crypto is required for intraday backtests. "
-            "Install with: pip install Historic-Crypto"
-        ) from exc
-
-    raw = HistoricalData(
-        ticker,
+    cfg = config or get_config()
+    df = fetch_intraday_ohlcv(
+        symbol,
+        start_dt,
+        end_dt,
         granularity,
-        start_str,
-        end_str,
-        verbose=False,
-    ).retrieve_data()
-    df = _normalize_historic_df(raw)
-    if not df.empty:
-        df.to_csv(cache_file, index=False)
+        live_mode=is_live_mode(cfg),
+        config=cfg,
+    )
+    df = _normalize_historic_df(df)
+    if df.empty:
+        raise BacktestDataError(
+            f"No OHLCV bars returned for {symbol} ({lookback.value} ending {end_date}). "
+            "Try a more recent end date, check network/API keys, or pass --live for ccxt fallback."
+        )
+    df.to_csv(cache_file, index=False)
     return df
 
 
@@ -490,6 +502,7 @@ def optimize_strategies(
     transaction_cost_pct: float = 0.001,
     lookbacks: Optional[Sequence[LookbackWindow]] = None,
     on_metric: Optional[Callable[[StrategyMetrics], None]] = None,
+    config: Optional[dict] = None,
 ) -> OptimizationResult:
     """Run all strategies across 8h, 24h, and 7d horizons; pick the winner."""
     strategies = list(strategies or DEFAULT_STRATEGIES)
@@ -497,13 +510,21 @@ def optimize_strategies(
     all_metrics: List[StrategyMetrics] = []
     warnings: List[str] = []
     metric_callback: Optional[Callable[[StrategyMetrics], None]] = on_metric
+    cfg = config or get_config()
 
-    for lookback in windows:
+    for idx, lookback in enumerate(windows):
+        if idx:
+            time.sleep(0.35)
         try:
-            df = fetch_historical_crypto(symbol, end_date, lookback)
-        except Exception as exc:
-            msg = f"{lookback.value}: historic fetch failed — {exc}"
+            df = fetch_historical_crypto(symbol, end_date, lookback, config=cfg)
+        except BacktestDataError as exc:
+            msg = f"{lookback.value}: {exc}"
             logger.warning("%s", msg)
+            warnings.append(msg)
+            continue
+        except Exception as exc:
+            msg = f"{lookback.value}: data fetch failed — {exc}"
+            logger.warning("%s", msg, exc_info=logger.isEnabledFor(logging.DEBUG))
             warnings.append(msg)
             continue
         if len(df) < 30:
@@ -573,13 +594,14 @@ def compute_strategy_signal(
     parameters: Dict[str, Any],
     lookback: LookbackWindow | str,
     end_date: Optional[str] = None,
+    config: Optional[dict] = None,
 ) -> str:
     """Return ``long``, ``short``, or ``flat`` for the latest bar of ``strategy_name``."""
     if strategy_name not in STRATEGY_REGISTRY:
         return "flat"
     lb = lookback if isinstance(lookback, LookbackWindow) else LookbackWindow(str(lookback))
     end = end_date or datetime.now().strftime("%Y-%m-%d")
-    df = fetch_historical_crypto(symbol, end, lb)
+    df = fetch_historical_crypto(symbol, end, lb, config=config)
     if df.empty:
         return "flat"
     strategy = build_strategy(strategy_name, parameters)
@@ -599,15 +621,17 @@ def deploy_winning_strategy(
     cfg = config or get_config()
     price = fetch_live_price(optimization.symbol, cfg)
     lookback = LookbackWindow(optimization.winner.lookback)
-    df = fetch_historical_crypto(optimization.symbol, optimization.end_date, lookback)
-
-    paper_signal = compute_strategy_signal(
-        optimization.symbol,
-        optimization.winner.strategy_name,
-        optimization.winner.parameters,
-        lookback,
-        optimization.end_date,
-    )
+    try:
+        paper_signal = compute_strategy_signal(
+            optimization.symbol,
+            optimization.winner.strategy_name,
+            optimization.winner.parameters,
+            lookback,
+            optimization.end_date,
+        )
+    except BacktestDataError as exc:
+        logger.warning("Paper signal skipped — %s", exc)
+        paper_signal = "flat"
 
     return optimization.model_copy(
         update={"live_price": price, "paper_signal": paper_signal}
