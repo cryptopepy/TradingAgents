@@ -17,7 +17,7 @@ from tradingagents.simulator.persistence import (
 class TestPaperPersistence:
     def test_save_and_restore_roundtrip(self, tmp_path):
         config = {"data_cache_dir": str(tmp_path)}
-        portfolio = VirtualPortfolio(initial_equity=100_000.0, fee_bps=8.0)
+        portfolio = VirtualPortfolio(initial_equity=10_000.0, fee_bps=8.0)
         portfolio.cash = 99_500.0
         portfolio.equity = 99_500.0
 
@@ -38,7 +38,7 @@ class TestPaperPersistence:
 
         restored = restore_portfolio(loaded)
         assert restored.equity == pytest.approx(99_500.0)
-        assert restored.initial_equity == pytest.approx(100_000.0)
+        assert restored.initial_equity == pytest.approx(10_000.0)
 
     def test_paper_session_path_is_symbol_safe(self, tmp_path):
         config = {"data_cache_dir": str(tmp_path)}

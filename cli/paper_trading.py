@@ -61,7 +61,7 @@ def run_paper_session(
             strategy_name=strategy_name,
             lookback=lookback,
             signal=StrategySignal.FLAT,
-            initial_equity=float(cfg.get("paper_initial_equity", 100_000.0)),
+            initial_equity=float(cfg.get("paper_initial_equity", 10_000.0)),
             stop_loss_pct=float(cfg.get("paper_stop_loss_pct", 0.02)),
             take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
         )

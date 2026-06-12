@@ -189,7 +189,7 @@ from tradingagents.backtest import optimize_strategies, deploy_winning_strategy
 from tradingagents.default_config import DEFAULT_CONFIG
 
 config = DEFAULT_CONFIG.copy()
-config["paper_initial_equity"] = 100_000.0
+config["paper_initial_equity"] = 10_000.0
 config["paper_stop_loss_pct"] = 0.02
 config["paper_take_profit_pct"] = 0.04  # optional; None → 2× stop-loss
 
@@ -254,7 +254,7 @@ Any `TRADINGAGENTS_*` in `.env.example` replaces the matching `default_config.py
 ```bash
 TRADINGAGENTS_LLM_PROVIDER=openai
 TRADINGAGENTS_LIVE_MODE=false
-TRADINGAGENTS_PAPER_INITIAL_EQUITY=100000
+TRADINGAGENTS_PAPER_INITIAL_EQUITY=10000
 TRADINGAGENTS_PAPER_STOP_LOSS_PCT=0.02
 TRADINGAGENTS_PAPER_TAKE_PROFIT_PCT=0.04
 TRADINGAGENTS_PAPER_ADAPTIVE_ENABLED=true

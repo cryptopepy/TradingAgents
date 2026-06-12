@@ -93,7 +93,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "paper_loss_review_minutes": 60,
     "paper_loss_threshold_pct": 5.0,
     "paper_tick_interval_seconds": 10.0,
-    "paper_initial_equity": 100_000.0,
+    "paper_initial_equity": 10_000.0,
     "paper_adaptive_enabled": True,
     "paper_state_persistence": True,
     "paper_stop_loss_pct": 0.02,

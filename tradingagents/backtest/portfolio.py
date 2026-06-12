@@ -47,7 +47,7 @@ class PortfolioSnapshot(BaseModel):
 class VirtualPortfolio:
     """In-memory portfolio for backtest and paper-trading simulation.
 
-    Paper trading defaults to ``$100,000`` cash with configurable fees and
+    Paper trading defaults to ``$10,000`` cash with configurable fees and
     long/short margin via per-intent ``leverage`` and ``sizing_pct``.
     """
 

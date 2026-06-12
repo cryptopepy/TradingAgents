@@ -1448,7 +1448,7 @@ def paper_cmd(
     equity: Optional[float] = typer.Option(
         None,
         "--equity",
-        help="Starting portfolio equity in USD (default: 100000).",
+        help="Starting portfolio equity in USD (default: 10000).",
     ),
     interactive: bool = typer.Option(
         True,

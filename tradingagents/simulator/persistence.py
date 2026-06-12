@@ -76,7 +76,7 @@ def load_paper_session(symbol: str, config: Optional[dict] = None) -> Optional[d
 def restore_portfolio(data: dict) -> VirtualPortfolio:
     """Rebuild ``VirtualPortfolio`` from a persisted payload."""
     portfolio = VirtualPortfolio(
-        initial_equity=float(data.get("initial_equity", 100_000.0)),
+        initial_equity=float(data.get("initial_equity", 10_000.0)),
         fee_bps=float(data.get("fee_bps", 10.0)),
     )
     portfolio.cash = float(data.get("cash", portfolio.initial_equity))

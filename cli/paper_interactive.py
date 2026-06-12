@@ -20,7 +20,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 console = Console()
 
 DEFAULT_TICKER = "BTC/USDT"
-DEFAULT_EQUITY = float(DEFAULT_CONFIG.get("paper_initial_equity", 100_000.0))
+DEFAULT_EQUITY = float(DEFAULT_CONFIG.get("paper_initial_equity", 10_000.0))
 DEFAULT_STRATEGY = "ema_crossover"
 STRATEGY_AUTO = "__auto_backtest__"
 

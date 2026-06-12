@@ -39,7 +39,7 @@ class TestPaperInteractive:
             interactive=False,
         )
         assert params.ticker == "BTC/USDT"
-        assert params.initial_equity == 100_000.0
+        assert params.initial_equity == 10_000.0
         assert params.strategy_name is None
         assert params.adaptive_enabled is True
 
@@ -83,7 +83,7 @@ class TestPaperInteractive:
         mock_select.return_value = MagicMock(ask=lambda: "__auto_backtest__")
         mock_text.side_effect = [
             MagicMock(ask=lambda: "ETH/USDC"),
-            MagicMock(ask=lambda: "100000"),
+            MagicMock(ask=lambda: "10000"),
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "30"),
             MagicMock(ask=lambda: "5.0"),
@@ -104,7 +104,7 @@ class TestPaperInteractive:
         )
         assert params.ticker == "ETH/USDC"
         assert params.strategy_name is None
-        assert params.initial_equity == 100_000.0
+        assert params.initial_equity == 10_000.0
         assert params.ticks == 10
         assert params.live_mode is True
         assert params.adaptive_enabled is True

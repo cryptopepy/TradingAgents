@@ -75,7 +75,7 @@ class PaperTradingEngine:
         self.on_state_change = on_state_change
         self.on_strategy_switch = on_strategy_switch
 
-        equity = session.initial_equity or float(self.config.get("paper_initial_equity", 100_000.0))
+        equity = session.initial_equity or float(self.config.get("paper_initial_equity", 10_000.0))
         fee_bps = float(session.slippage_bps)
         self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
         self._restore_persisted_session()
