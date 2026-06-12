@@ -96,9 +96,9 @@ Atomic commits per phase: `feat/P{n}-*: ...` — do not bundle phases.
 - [x] P4-6: Tests — rotation logging, drawdown breach triggers
 
 ### Phase 5 — README Alignment (`feat/P5-*`)
-- [ ] P5-1: README overhaul — analyzer → algorithmic paper trading platform evolution
-- [ ] P5-2: Document all config keys (required vs optional)
-- [ ] P5-3: Step-by-step guides — analyst flow, interactive backtester, autonomous re-optimization, virtual portfolio UI
+- [x] P5-1: README overhaul — analyzer → algorithmic paper trading platform evolution
+- [x] P5-2: Document all config keys (required vs optional)
+- [x] P5-3: Step-by-step guides — analyst flow, interactive backtester, autonomous re-optimization, virtual portfolio UI
 
 ## Active Task Logs
 
