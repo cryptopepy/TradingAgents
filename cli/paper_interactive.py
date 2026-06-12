@@ -374,7 +374,7 @@ def prompt_paper_params(
     else:
         live_answer = questionary.confirm(
             "Enable live-mode price fallback (ccxt Binance) when vendors fail?",
-            default=False,
+            default=True,
         ).ask()
         if live_answer is None:
             raise BacktestValidationError("Paper trading cancelled.")

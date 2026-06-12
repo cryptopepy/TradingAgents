@@ -135,7 +135,7 @@ def prompt_backtest_params(
     )
     live = questionary.confirm(
         "Enable live-mode price fallback (ccxt Binance) after optimization?",
-        default=False,
+        default=True,
     ).ask()
     if live is None:
         raise BacktestValidationError("Backtest cancelled.")
