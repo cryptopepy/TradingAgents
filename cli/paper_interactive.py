@@ -16,7 +16,7 @@ from tradingagents.backtest.validation import (
     validate_ticker,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.simulator.persistence import load_paper_session
+from tradingagents.simulator.persistence import delete_paper_session, load_paper_session
 
 console = Console()
 
@@ -145,11 +145,9 @@ def _prompt_resume_or_fresh(
     *,
     ticker: str,
     saved_equity: float,
-    fresh_equity: float,
 ) -> bool:
     """Return True to resume the saved session, False to start fresh."""
     saved_label = f"${saved_equity:,.2f}"
-    fresh_label = f"${fresh_equity:,.2f}"
     choice = questionary.select(
         f"Saved session for {ticker} ({saved_label} equity). Resume or start fresh?",
         choices=[
@@ -158,7 +156,7 @@ def _prompt_resume_or_fresh(
                 value=True,
             ),
             questionary.Choice(
-                f"Start fresh with {fresh_label}",
+                "Start fresh",
                 value=False,
             ),
         ],
@@ -167,6 +165,46 @@ def _prompt_resume_or_fresh(
     if choice is None:
         raise BacktestValidationError("Paper trading cancelled.")
     return bool(choice)
+
+
+def _resolve_equity_and_session(
+    *,
+    ticker: str,
+    config: dict,
+    equity: Optional[float] = None,
+    fresh_start: bool = False,
+    interactive: bool = True,
+) -> tuple[float, bool, bool]:
+    """Return ``(initial_equity, resume_saved_session, fresh_start)``."""
+    default_equity = float(config.get("paper_initial_equity", DEFAULT_EQUITY))
+    resume_saved = False
+    start_fresh = fresh_start
+    saved_equity = _saved_session_equity(ticker, config)
+
+    if saved_equity is not None and not fresh_start:
+        if interactive:
+            resume_saved = _prompt_resume_or_fresh(
+                ticker=ticker,
+                saved_equity=saved_equity,
+            )
+            start_fresh = not resume_saved
+        else:
+            resume_saved = True
+
+    if resume_saved:
+        return saved_equity, True, False
+
+    if start_fresh and saved_equity is not None:
+        delete_paper_session(ticker, config)
+
+    if equity is not None:
+        resolved = validate_positive_float(equity, name="Equity", minimum=1.0)
+    elif interactive:
+        resolved = _prompt_equity(default_equity)
+    else:
+        resolved = default_equity
+
+    return resolved, False, start_fresh
 
 
 def _prompt_equity(default: float = DEFAULT_EQUITY) -> float:
@@ -267,7 +305,7 @@ def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     if window_raw is None:
         raise BacktestValidationError("Paper trading cancelled.")
     threshold_raw = questionary.text(
-        "Max allowed drawdown % (e.g. 5.0):",
+        "Max allowed drawdown (loss) % (e.g. 5.0):",
         default=threshold_default,
     ).ask()
     if threshold_raw is None:
@@ -316,27 +354,17 @@ def prompt_paper_params(
         if strategy_name is not None
         else _prompt_strategy()
     )
-    resolved_equity = (
-        validate_positive_float(equity, name="Equity", minimum=1.0)
-        if equity is not None
-        else _prompt_equity(float(cfg.get("paper_initial_equity", DEFAULT_EQUITY)))
+    resolved_equity, resume_saved, start_fresh = _resolve_equity_and_session(
+        ticker=resolved_ticker,
+        config=cfg,
+        equity=equity,
+        fresh_start=fresh_start,
+        interactive=True,
     )
-
-    resume_saved = False
-    start_fresh = fresh_start
-    saved_equity = _saved_session_equity(resolved_ticker, cfg)
-    if saved_equity is not None and not fresh_start:
-        resume_saved = _prompt_resume_or_fresh(
-            ticker=resolved_ticker,
-            saved_equity=saved_equity,
-            fresh_equity=resolved_equity,
+    if resume_saved:
+        console.print(
+            f"[dim]Resuming saved session at {resolved_equity:,.2f} USD.[/dim]"
         )
-        start_fresh = not resume_saved
-        if resume_saved:
-            console.print(
-                f"[dim]Resuming saved session at {saved_equity:,.2f} USD "
-                f"(ignoring starting equity {resolved_equity:,.2f}).[/dim]"
-            )
 
     resolved_ticks = validate_ticks(ticks) if ticks is not None else _prompt_ticks()
     stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(cfg)
@@ -424,18 +452,18 @@ def resolve_paper_params(
         return params
 
     resolved_ticker = validate_ticker(ticker or DEFAULT_TICKER)
-    resolved_equity = (
-        validate_positive_float(equity, name="Equity", minimum=1.0)
-        if equity is not None
-        else float(cfg.get("paper_initial_equity", DEFAULT_EQUITY))
+    resolved_equity, resume_saved, start_fresh = _resolve_equity_and_session(
+        ticker=resolved_ticker,
+        config=cfg,
+        equity=equity,
+        fresh_start=fresh_start,
+        interactive=False,
     )
     resolved_adaptive = (
         adaptive_enabled
         if adaptive_enabled is not None
         else bool(cfg.get("paper_adaptive_enabled", True))
     )
-    saved_equity = _saved_session_equity(resolved_ticker, cfg)
-    resume_saved = bool(saved_equity is not None and not fresh_start)
     return PaperRunParams(
         ticker=resolved_ticker,
         strategy_name=validate_strategy_name(strategy_name),
@@ -449,7 +477,7 @@ def resolve_paper_params(
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
         resume_saved_session=resume_saved,
-        fresh_start=fresh_start,
+        fresh_start=start_fresh,
     )
 
 

@@ -28,7 +28,7 @@ class TestPaperInteractive:
         with pytest.raises(BacktestValidationError, match="positive integer"):
             validate_ticks(0)
 
-    def test_resolve_paper_params_non_interactive_defaults(self):
+    def test_resolve_paper_params_non_interactive_defaults(self, tmp_path):
         params = resolve_paper_params(
             ticker=None,
             strategy_name=None,
@@ -37,6 +37,7 @@ class TestPaperInteractive:
             live_mode=False,
             adaptive_enabled=None,
             interactive=False,
+            config={"data_cache_dir": str(tmp_path)},
         )
         assert params.ticker == "BTC/USDT"
         assert params.initial_equity == 10_000.0
@@ -177,6 +178,7 @@ class TestPaperInteractive:
         )
         assert params.resume_saved_session is True
         assert params.fresh_start is False
+        assert params.initial_equity == 15_432.0
 
     @patch("cli.paper_interactive._saved_session_equity", return_value=15_432.0)
     @patch("cli.paper_interactive._is_interactive_tty", return_value=True)
@@ -192,7 +194,6 @@ class TestPaperInteractive:
         ]
         mock_text.side_effect = [
             MagicMock(ask=lambda: "BTC/USDT"),
-            MagicMock(ask=lambda: "10000"),
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "0.02"),
             MagicMock(ask=lambda: ""),
@@ -215,3 +216,45 @@ class TestPaperInteractive:
         )
         assert params.resume_saved_session is True
         assert params.fresh_start is False
+        assert params.initial_equity == 15_432.0
+
+    @patch("cli.paper_interactive.delete_paper_session")
+    @patch("cli.paper_interactive._saved_session_equity", return_value=15_432.0)
+    @patch("cli.paper_interactive._is_interactive_tty", return_value=True)
+    @patch("cli.paper_interactive.questionary.confirm")
+    @patch("cli.paper_interactive.questionary.text")
+    @patch("cli.paper_interactive.questionary.select")
+    def test_prompt_fresh_start_clears_session_then_equity(
+        self, mock_select, mock_text, mock_confirm, _tty, _saved, mock_delete
+    ):
+        mock_select.side_effect = [
+            MagicMock(ask=lambda: "__auto_backtest__"),
+            MagicMock(ask=lambda: False),
+        ]
+        mock_text.side_effect = [
+            MagicMock(ask=lambda: "BTC/USDT"),
+            MagicMock(ask=lambda: "12000"),
+            MagicMock(ask=lambda: "5"),
+            MagicMock(ask=lambda: "0.02"),
+            MagicMock(ask=lambda: ""),
+            MagicMock(ask=lambda: "60"),
+            MagicMock(ask=lambda: "5.0"),
+        ]
+        mock_confirm.side_effect = [
+            MagicMock(ask=lambda: False),
+            MagicMock(ask=lambda: True),
+        ]
+
+        params = resolve_paper_params(
+            ticker=None,
+            strategy_name=None,
+            equity=None,
+            ticks=None,
+            live_mode=False,
+            adaptive_enabled=None,
+            interactive=True,
+        )
+        mock_delete.assert_called_once()
+        assert params.resume_saved_session is False
+        assert params.fresh_start is True
+        assert params.initial_equity == 12_000.0

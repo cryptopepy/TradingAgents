@@ -143,9 +143,21 @@ def run_paper_session(
     console.print(f"[dim]Paper session ended after {tick_count} tick(s).[/dim]")
 
 
-def prompt_paper_options(config: dict) -> dict:
+def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     """Interactive paper-trading options (post-analysis deploy flow)."""
-    from cli.paper_interactive import _prompt_adaptive_settings, _prompt_ticks
+    from cli.paper_interactive import (
+        _prompt_adaptive_settings,
+        _prompt_ticks,
+        _resolve_equity_and_session,
+    )
+
+    equity, _, start_fresh = _resolve_equity_and_session(
+        ticker=ticker,
+        config=config,
+        interactive=True,
+    )
+    config["paper_initial_equity"] = equity
+    config["paper_fresh_start"] = start_fresh
 
     adaptive, window, threshold = _prompt_adaptive_settings(config)
     config["drawdown_time_window_minutes"] = window

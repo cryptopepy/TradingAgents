@@ -206,7 +206,7 @@ def prompt_deploy_simulator(
         return
 
     optimization = deploy_winning_strategy(optimization, config)
-    opts = prompt_paper_options(config)
+    opts = prompt_paper_options(config, ticker=optimization.symbol)
     run_paper_session(
         optimization.symbol,
         config,
@@ -304,7 +304,7 @@ def show_post_analysis_menu(
             run_interactive_backtest(ticker, analysis_date, config, custom=True)
             continue
         if action == "paper_trade":
-            opts = prompt_paper_options(config)
+            opts = prompt_paper_options(config, ticker=ticker)
             run_paper_session(
                 ticker,
                 config,
