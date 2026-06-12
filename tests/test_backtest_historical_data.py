@@ -1,5 +1,6 @@
 """Regression tests for backtest OHLCV fetch and silent-exit prevention."""
 
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -74,6 +75,53 @@ class TestBacktestHistoricalData:
             result = run_backtest_with_progress("BTC/USDT", "2026-06-01")
 
         assert len(result.results) == 30
+
+    def test_fetch_historical_crypto_caps_end_dt_to_now_for_today(self):
+        df = _sample_ohlcv(80)
+        noon = datetime(2026, 6, 12, 12, 0, 0)
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            fetch_historical_crypto(
+                "BTC/USDT", "2026-06-12", LookbackWindow.H8, now=noon
+            )
+
+        start_dt, end_dt = mock_fetch.call_args[0][1], mock_fetch.call_args[0][2]
+        assert end_dt == noon
+        assert end_dt <= noon
+        assert start_dt == end_dt - LookbackWindow.H8.to_timedelta()
+
+    def test_fetch_historical_crypto_uses_end_of_day_for_past_dates(self):
+        df = _sample_ohlcv(80)
+        noon = datetime(2026, 6, 12, 12, 0, 0)
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            fetch_historical_crypto(
+                "BTC/USDT", "2026-06-06", LookbackWindow.H8, now=noon
+            )
+
+        end_dt = mock_fetch.call_args[0][2]
+        assert end_dt.hour == 23 and end_dt.minute == 59
+
+    def test_fetch_historical_crypto_raises_when_window_empty_after_cap(self):
+        noon = datetime(2026, 6, 12, 12, 0, 0)
+        zero_lookback = MagicMock()
+        zero_lookback.to_timedelta.return_value = timedelta(0)
+        zero_lookback.granularity_seconds.return_value = 300
+        zero_lookback.value = "8h"
+
+        with pytest.raises(
+            BacktestDataError,
+            match="Not enough history yet today for 8h window",
+        ):
+            fetch_historical_crypto(
+                "BTC/USDT", "2026-06-12", zero_lookback, now=noon
+            )
 
     def test_fetch_historical_crypto_does_not_call_historic_crypto(self):
         df = _sample_ohlcv(80)

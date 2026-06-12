@@ -271,6 +271,7 @@ def fetch_intraday_ohlcv(
         "Check network connectivity and API keys (CRYPTOCOMPARE_API_KEY).",
         "Try a more recent end date or a liquid pair (e.g. BTC/USDT).",
         "Use --live to enable ccxt Binance fallback when direct APIs are geo-blocked.",
+        "If the analysis date is today, end time is capped to now — use yesterday or wait for more history.",
     ]
     raise BacktestDataError(
         "\n".join(

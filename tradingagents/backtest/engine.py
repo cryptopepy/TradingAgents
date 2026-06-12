@@ -12,7 +12,7 @@ import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -105,6 +105,37 @@ def _format_historic_date(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d-%H-%M")
 
 
+def _utc_now_naive(*, now: datetime | None = None) -> datetime:
+    """Return current UTC time as a naive datetime (matches OHLCV Date columns)."""
+    if now is None:
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+    if now.tzinfo is not None:
+        return now.astimezone(timezone.utc).replace(tzinfo=None)
+    return now
+
+
+def _resolve_backtest_end_dt(
+    end_date: str,
+    *,
+    now: datetime | None = None,
+) -> tuple[datetime, bool]:
+    """Return UTC-naive end datetime for a backtest window, capped to now when needed."""
+    end_of_day = pd.to_datetime(end_date).to_pydatetime().replace(
+        hour=23, minute=59, second=0, microsecond=0
+    )
+    now_utc = _utc_now_naive(now=now)
+    end_dt = min(end_of_day, now_utc)
+    capped = end_dt < end_of_day
+    if capped:
+        logger.debug(
+            "Capped backtest end time from %s to now (%s) for analysis date %s",
+            end_of_day.strftime("%Y-%m-%d %H:%M"),
+            end_dt.strftime("%Y-%m-%d %H:%M"),
+            end_date,
+        )
+    return end_dt, capped
+
+
 def _cache_path(ticker: str, granularity: int, start: str, end: str) -> Path:
     config = get_config()
     cache_dir = Path(config["data_cache_dir"]) / "historic_crypto"
@@ -168,14 +199,17 @@ def fetch_historical_crypto(
     *,
     force_refresh: bool = False,
     config: Optional[dict] = None,
+    now: datetime | None = None,
 ) -> pd.DataFrame:
     """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks."""
     ticker = _historic_ticker(symbol)
     granularity = lookback.granularity_seconds()
-    end_dt = pd.to_datetime(end_date).to_pydatetime().replace(
-        hour=23, minute=59, second=0, microsecond=0
-    )
+    end_dt, _ = _resolve_backtest_end_dt(end_date, now=now)
     start_dt = end_dt - lookback.to_timedelta()
+    if end_dt <= start_dt:
+        raise BacktestDataError(
+            f"Not enough history yet today for {lookback.value} window — try yesterday or wait."
+        )
     start_str = _format_historic_date(start_dt)
     end_str = _format_historic_date(end_dt)
     cache_file = _cache_path(ticker, granularity, start_str, end_str)
