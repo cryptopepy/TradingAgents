@@ -28,6 +28,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_DRAWDOWN_TIME_WINDOW": "drawdown_time_window_minutes",
     "TRADINGAGENTS_MAX_ALLOWED_DRAWDOWN_PCT": "max_allowed_drawdown_pct",
     "TRADINGAGENTS_PAPER_STATE_ENABLED": "paper_state_persistence",
+    "TRADINGAGENTS_PAPER_STOP_LOSS_PCT": "paper_stop_loss_pct",
+    "TRADINGAGENTS_PAPER_TAKE_PROFIT_PCT": "paper_take_profit_pct",
 }
 
 
@@ -94,6 +96,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "paper_initial_equity": 100_000.0,
     "paper_adaptive_enabled": True,
     "paper_state_persistence": True,
+    "paper_stop_loss_pct": 0.02,
+    "paper_take_profit_pct": None,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "max_allowed_drawdown_pct": 5.0,

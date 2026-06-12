@@ -125,7 +125,8 @@ class VirtualPortfolio:
         move = (price - pos["entry_price"]) / pos["entry_price"]
         if pos["side"] < 0:
             move = -move
-        pnl = self.equity * pos.get("sizing_pct", 1.0) * move * pos.get("leverage", 1.0)
+        notional_base = self.initial_equity * pos.get("sizing_pct", 1.0)
+        pnl = notional_base * move * pos.get("leverage", 1.0)
         self.cash += pnl
         self.equity = self.cash
         self._recompute_equity()

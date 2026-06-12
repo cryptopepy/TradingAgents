@@ -55,12 +55,15 @@ def run_paper_session(
     if strategy_name:
         from tradingagents.simulator import PaperTradingSession, StrategySignal
 
+        take_profit_raw = cfg.get("paper_take_profit_pct")
         session = PaperTradingSession(
             symbol=ticker,
             strategy_name=strategy_name,
             lookback=lookback,
             signal=StrategySignal.FLAT,
             initial_equity=float(cfg.get("paper_initial_equity", 100_000.0)),
+            stop_loss_pct=float(cfg.get("paper_stop_loss_pct", 0.02)),
+            take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
         )
     else:
         console.print(f"[cyan]Running backtest to select strategy for {ticker}…[/cyan]")

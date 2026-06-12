@@ -188,6 +188,7 @@ class PaperTradingEngine:
             asset=self.session.symbol,
             matcher=self.matcher,
             stop_loss_pct=self.session.stop_loss_pct,
+            take_profit_pct=self.session.take_profit_pct,
             slippage_bps=self.session.slippage_bps,
         )
         self._tick_history.append(result)
@@ -338,6 +339,8 @@ def session_from_optimization(
         optimization.winner.lookback,
         optimization.end_date,
     )
+    stop_loss_pct = float(cfg.get("paper_stop_loss_pct", 0.02))
+    take_profit_raw = cfg.get("paper_take_profit_pct")
     return PaperTradingSession(
         symbol=optimization.symbol,
         strategy_name=optimization.winner.strategy_name,
@@ -345,4 +348,6 @@ def session_from_optimization(
         parameters=dict(optimization.winner.parameters),
         lookback=optimization.winner.lookback,
         initial_equity=float(cfg.get("paper_initial_equity", 10_000.0)),
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
     )

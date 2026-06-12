@@ -169,16 +169,24 @@ def prompt_custom_backtest_params() -> dict:
         "Stop-loss % (e.g. 0.02 for 2%):",
         default="0.02",
     ).ask() or "0.02"
+    stop_loss_pct = float(stop_loss_str)
+    take_profit_str = questionary.text(
+        "Take-profit % (empty = 2× stop-loss):",
+        default="",
+    ).ask() or ""
     fee_str = questionary.text(
         "Transaction cost % per side (e.g. 0.001 for 0.1%):",
         default="0.001",
     ).ask() or "0.001"
 
-    return {
+    params: dict = {
         "lookbacks": lookbacks,
-        "stop_loss_pct": float(stop_loss_str),
+        "stop_loss_pct": stop_loss_pct,
         "transaction_cost_pct": float(fee_str),
     }
+    if take_profit_str.strip():
+        params["take_profit_pct"] = float(take_profit_str)
+    return params
 
 
 def prompt_deploy_simulator(
@@ -230,6 +238,10 @@ def run_interactive_backtest(
             transaction_cost_pct=params.get("transaction_cost_pct", 0.001),
         )
         optimization = deploy_winning_strategy(optimization, config)
+        if params.get("stop_loss_pct") is not None:
+            config["paper_stop_loss_pct"] = params["stop_loss_pct"]
+        if params.get("take_profit_pct") is not None:
+            config["paper_take_profit_pct"] = params["take_profit_pct"]
     except BacktestValidationError as exc:
         console.print(f"[red]Backtest validation error:[/red]\n{exc}")
         return None

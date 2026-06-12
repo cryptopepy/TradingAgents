@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,15 @@ class StrategySignal(str, Enum):
                 return member
         return cls.FLAT
 
+    @classmethod
+    def from_value(cls, value: Union[str, int, float, "StrategySignal"]) -> "StrategySignal":
+        """Map strategy signal series values: 1=long, -1=short, 0=flat."""
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, (int, float)):
+            return {1: cls.LONG, -1: cls.SHORT}.get(int(value), cls.FLAT)
+        return cls.from_string(str(value))
+
 
 class AssetPosition(BaseModel):
     """Open position snapshot for the paper simulator."""
@@ -55,6 +64,7 @@ class AssetPosition(BaseModel):
     size: float
     entry_price: float
     stop_loss_pct: float = 0.02
+    take_profit_pct: float = 0.04
     unrealized_pnl: float = 0.0
 
 
@@ -68,6 +78,7 @@ class TickEvaluationResult(BaseModel):
     portfolio_equity: float
     position: Optional[AssetPosition] = None
     stop_loss_triggered: bool = False
+    take_profit_triggered: bool = False
 
 
 class PaperTradingSession(BaseModel):
@@ -79,8 +90,28 @@ class PaperTradingSession(BaseModel):
     parameters: Dict[str, Any] = Field(default_factory=dict)
     lookback: str = "24h"
     stop_loss_pct: float = 0.02
+    take_profit_pct: Optional[float] = None
     slippage_bps: float = 10.0
     initial_equity: float = 1.0
+
+
+def _resolve_take_profit_pct(
+    take_profit_pct: Optional[float],
+    stop_loss_pct: float,
+) -> float:
+    if take_profit_pct is not None:
+        return take_profit_pct
+    return stop_loss_pct * 2.0
+
+
+def _position_move(portfolio: VirtualPortfolio, asset: str, price: float) -> float:
+    pos = portfolio.positions.get(asset)
+    if not pos:
+        return 0.0
+    move = (price - pos["entry_price"]) / pos["entry_price"]
+    if pos["side"] < 0:
+        move = -move
+    return move
 
 
 def _position_from_portfolio(
@@ -88,14 +119,13 @@ def _position_from_portfolio(
     asset: str,
     price: float,
     stop_loss_pct: float,
+    take_profit_pct: float,
 ) -> Optional[AssetPosition]:
     pos = portfolio.positions.get(asset)
     if not pos:
         return None
     side = StrategySignal.LONG if pos["side"] > 0 else StrategySignal.SHORT
-    move = (price - pos["entry_price"]) / pos["entry_price"]
-    if pos["side"] < 0:
-        move = -move
+    move = _position_move(portfolio, asset, price)
     notional_base = portfolio.initial_equity * pos.get("sizing_pct", 1.0)
     upnl = notional_base * move * pos.get("leverage", 1.0)
     return AssetPosition(
@@ -104,6 +134,7 @@ def _position_from_portfolio(
         size=float(pos["size"]),
         entry_price=float(pos["entry_price"]),
         stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
         unrealized_pnl=upnl,
     )
 
@@ -114,31 +145,37 @@ def _stop_loss_breached(
     price: float,
     stop_loss_pct: float,
 ) -> bool:
-    pos = portfolio.positions.get(asset)
-    if not pos:
+    if asset not in portfolio.positions:
         return False
-    move = (price - pos["entry_price"]) / pos["entry_price"]
-    if pos["side"] < 0:
-        move = -move
-    return move <= -stop_loss_pct
+    return _position_move(portfolio, asset, price) <= -stop_loss_pct
+
+
+def _take_profit_hit(
+    portfolio: VirtualPortfolio,
+    asset: str,
+    price: float,
+    take_profit_pct: float,
+) -> bool:
+    if asset not in portfolio.positions:
+        return False
+    move = _position_move(portfolio, asset, price)
+    return move > 0 and move >= take_profit_pct
 
 
 def evaluate_live_market_tick(
     portfolio: VirtualPortfolio,
     current_tick_price: float,
-    winning_strategy_signal: str | StrategySignal,
+    winning_strategy_signal: Union[str, int, float, StrategySignal],
     *,
     asset: str,
     matcher: Optional[SimulatedMatcher] = None,
     stop_loss_pct: float = 0.02,
+    take_profit_pct: Optional[float] = None,
     slippage_bps: float = 10.0,
 ) -> TickEvaluationResult:
-    """Apply one market tick: stop-loss, signal entry/exit, fees via matcher slippage."""
-    signal = (
-        winning_strategy_signal
-        if isinstance(winning_strategy_signal, StrategySignal)
-        else StrategySignal.from_string(winning_strategy_signal)
-    )
+    """Apply one market tick: stop-loss, take-profit, signal entry/exit, fees via matcher."""
+    signal = StrategySignal.from_value(winning_strategy_signal)
+    resolved_take_profit = _resolve_take_profit_pct(take_profit_pct, stop_loss_pct)
     sim = matcher or SimulatedMatcher(
         slippage_bps=slippage_bps,
         portfolio=portfolio,
@@ -150,25 +187,31 @@ def evaluate_live_market_tick(
     price = float(current_tick_price)
     action = "hold"
     stop_triggered = False
+    take_profit_triggered = False
 
     portfolio.mark_to_market({asset: price})
 
-    if _stop_loss_breached(portfolio, asset, price, stop_loss_pct):
-        from tradingagents.backtest.portfolio import TransactionIntent
+    from tradingagents.backtest.portfolio import TransactionIntent
 
+    if _stop_loss_breached(portfolio, asset, price, stop_loss_pct):
         sim.submit_intent(
             TransactionIntent(timestamp=now, asset=asset, direction=Direction.EXIT),
             reference_price=price,
         )
         action = "stop_loss_exit"
         stop_triggered = True
+    elif _take_profit_hit(portfolio, asset, price, resolved_take_profit):
+        sim.submit_intent(
+            TransactionIntent(timestamp=now, asset=asset, direction=Direction.EXIT),
+            reference_price=price,
+        )
+        action = "take_profit_exit"
+        take_profit_triggered = True
     else:
         open_side = None
         pos = portfolio.positions.get(asset)
         if pos:
             open_side = StrategySignal.LONG if pos["side"] > 0 else StrategySignal.SHORT
-
-        from tradingagents.backtest.portfolio import TransactionIntent
 
         if signal == StrategySignal.FLAT and open_side is not None:
             sim.submit_intent(
@@ -202,7 +245,9 @@ def evaluate_live_market_tick(
             action = "hold"
 
     portfolio.mark_to_market({asset: price})
-    position = _position_from_portfolio(portfolio, asset, price, stop_loss_pct)
+    position = _position_from_portfolio(
+        portfolio, asset, price, stop_loss_pct, resolved_take_profit
+    )
 
     return TickEvaluationResult(
         timestamp=now,
@@ -212,6 +257,7 @@ def evaluate_live_market_tick(
         portfolio_equity=portfolio.equity,
         position=position,
         stop_loss_triggered=stop_triggered,
+        take_profit_triggered=take_profit_triggered,
     )
 
 
@@ -252,6 +298,7 @@ def run_polling_loop(
             asset=session.symbol,
             matcher=matcher,
             stop_loss_pct=session.stop_loss_pct,
+            take_profit_pct=session.take_profit_pct,
             slippage_bps=session.slippage_bps,
         )
         if on_tick:
