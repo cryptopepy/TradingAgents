@@ -73,6 +73,16 @@ def load_paper_session(symbol: str, config: Optional[dict] = None) -> Optional[d
         return None
 
 
+def delete_paper_session(symbol: str, config: Optional[dict] = None) -> bool:
+    """Remove a saved session file. Returns True if a file was deleted."""
+    path = paper_session_path(symbol, config)
+    if not path.exists():
+        return False
+    path.unlink()
+    logger.debug("Deleted paper session at %s", path)
+    return True
+
+
 def restore_portfolio(data: dict) -> VirtualPortfolio:
     """Rebuild ``VirtualPortfolio`` from a persisted payload."""
     portfolio = VirtualPortfolio(

@@ -29,6 +29,7 @@ from tradingagents.simulator.core import (
     evaluate_live_market_tick,
 )
 from tradingagents.simulator.persistence import (
+    delete_paper_session,
     load_paper_session,
     restore_portfolio,
     save_paper_session,
@@ -139,6 +140,9 @@ class PaperTradingEngine:
 
     def _restore_persisted_session(self) -> None:
         if not self.config.get("paper_state_persistence", True):
+            return
+        if self.config.get("paper_fresh_start"):
+            delete_paper_session(self.session.symbol, self.config)
             return
         saved = load_paper_session(self.session.symbol, self.config)
         if not saved:

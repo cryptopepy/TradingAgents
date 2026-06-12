@@ -106,3 +106,31 @@ class TestPaperTradingEngine:
 
         assert tick_count == 1
         assert elapsed < 2.0
+
+    def test_fresh_start_ignores_saved_session(self, tmp_path):
+        from tradingagents.simulator.persistence import save_paper_session
+
+        config = {
+            "data_cache_dir": str(tmp_path),
+            "paper_fresh_start": True,
+        }
+        portfolio = __import__(
+            "tradingagents.backtest.portfolio", fromlist=["VirtualPortfolio"]
+        ).VirtualPortfolio(initial_equity=10_000.0)
+        portfolio.equity = 15_432.0
+        save_paper_session(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            lookback="24h",
+            signal="long",
+            portfolio=portfolio,
+            config=config,
+        )
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        engine = PaperTradingEngine(session, config, adaptive_enabled=False)
+        assert engine.portfolio.equity == pytest.approx(10_000.0)

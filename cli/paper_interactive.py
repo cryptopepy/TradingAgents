@@ -16,6 +16,7 @@ from tradingagents.backtest.validation import (
     validate_ticker,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.simulator.persistence import load_paper_session
 
 console = Console()
 
@@ -38,6 +39,8 @@ class PaperRunParams:
     adaptive_enabled: bool
     drawdown_window_minutes: float
     max_drawdown_pct: float
+    resume_saved_session: bool = False
+    fresh_start: bool = False
 
 
 def _is_interactive_tty() -> bool:
@@ -129,6 +132,41 @@ def _prompt_strategy() -> Optional[str]:
     if choice is None:
         raise BacktestValidationError("Paper trading cancelled.")
     return validate_strategy_name(choice)
+
+
+def _saved_session_equity(ticker: str, config: dict) -> Optional[float]:
+    saved = load_paper_session(ticker, config)
+    if not saved:
+        return None
+    return float(saved.get("equity", saved.get("cash", 0.0)))
+
+
+def _prompt_resume_or_fresh(
+    *,
+    ticker: str,
+    saved_equity: float,
+    fresh_equity: float,
+) -> bool:
+    """Return True to resume the saved session, False to start fresh."""
+    saved_label = f"${saved_equity:,.2f}"
+    fresh_label = f"${fresh_equity:,.2f}"
+    choice = questionary.select(
+        f"Saved session for {ticker} ({saved_label} equity). Resume or start fresh?",
+        choices=[
+            questionary.Choice(
+                f"Resume saved session ({saved_label})",
+                value=True,
+            ),
+            questionary.Choice(
+                f"Start fresh with {fresh_label}",
+                value=False,
+            ),
+        ],
+        use_indicator=True,
+    ).ask()
+    if choice is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    return bool(choice)
 
 
 def _prompt_equity(default: float = DEFAULT_EQUITY) -> float:
@@ -255,6 +293,7 @@ def prompt_paper_params(
     equity: Optional[float] = None,
     ticks: Optional[int] = None,
     live_mode: bool = False,
+    fresh_start: bool = False,
 ) -> PaperRunParams:
     """Full interactive questionnaire for standalone paper trading runs."""
     if not _is_interactive_tty():
@@ -282,6 +321,23 @@ def prompt_paper_params(
         if equity is not None
         else _prompt_equity(float(cfg.get("paper_initial_equity", DEFAULT_EQUITY)))
     )
+
+    resume_saved = False
+    start_fresh = fresh_start
+    saved_equity = _saved_session_equity(resolved_ticker, cfg)
+    if saved_equity is not None and not fresh_start:
+        resume_saved = _prompt_resume_or_fresh(
+            ticker=resolved_ticker,
+            saved_equity=saved_equity,
+            fresh_equity=resolved_equity,
+        )
+        start_fresh = not resume_saved
+        if resume_saved:
+            console.print(
+                f"[dim]Resuming saved session at {saved_equity:,.2f} USD "
+                f"(ignoring starting equity {resolved_equity:,.2f}).[/dim]"
+            )
+
     resolved_ticks = validate_ticks(ticks) if ticks is not None else _prompt_ticks()
     stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(cfg)
 
@@ -310,6 +366,8 @@ def prompt_paper_params(
         adaptive_enabled=adaptive,
         drawdown_window_minutes=window,
         max_drawdown_pct=threshold,
+        resume_saved_session=resume_saved,
+        fresh_start=start_fresh,
     )
 
 
@@ -322,6 +380,7 @@ def resolve_paper_params(
     live_mode: bool,
     adaptive_enabled: Optional[bool],
     interactive: bool,
+    fresh_start: bool = False,
     config: dict | None = None,
 ) -> PaperRunParams:
     """Resolve CLI flags into validated ``PaperRunParams``."""
@@ -342,6 +401,7 @@ def resolve_paper_params(
             equity=equity,
             ticks=ticks,
             live_mode=live_mode,
+            fresh_start=fresh_start,
         )
         if strategy_name is not None:
             params = replace(
@@ -374,6 +434,8 @@ def resolve_paper_params(
         if adaptive_enabled is not None
         else bool(cfg.get("paper_adaptive_enabled", True))
     )
+    saved_equity = _saved_session_equity(resolved_ticker, cfg)
+    resume_saved = bool(saved_equity is not None and not fresh_start)
     return PaperRunParams(
         ticker=resolved_ticker,
         strategy_name=validate_strategy_name(strategy_name),
@@ -386,6 +448,8 @@ def resolve_paper_params(
         adaptive_enabled=resolved_adaptive,
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
+        resume_saved_session=resume_saved,
+        fresh_start=fresh_start,
     )
 
 
@@ -402,4 +466,5 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_take_profit_pct"] = params.take_profit_pct
     if params.live_mode:
         cfg["live_mode"] = True
+    cfg["paper_fresh_start"] = params.fresh_start
     return cfg

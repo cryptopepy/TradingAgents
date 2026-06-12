@@ -6,6 +6,7 @@ import pytest
 
 from tradingagents.backtest.portfolio import VirtualPortfolio
 from tradingagents.simulator.persistence import (
+    delete_paper_session,
     load_paper_session,
     paper_session_path,
     restore_portfolio,
@@ -54,3 +55,17 @@ class TestPaperPersistence:
         )
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["symbol"] == "ETH/USDC"
+
+    def test_delete_paper_session(self, tmp_path):
+        config = {"data_cache_dir": str(tmp_path)}
+        save_paper_session(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            lookback="24h",
+            signal="flat",
+            portfolio=VirtualPortfolio(10_000.0),
+            config=config,
+        )
+        assert delete_paper_session("BTC/USDT", config) is True
+        assert load_paper_session("BTC/USDT", config) is None
+        assert delete_paper_session("BTC/USDT", config) is False

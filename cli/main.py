@@ -1455,6 +1455,11 @@ def paper_cmd(
         "--interactive/--no-interactive",
         help="Prompt for missing parameters (default on TTY).",
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Ignore any saved paper session and start with the requested equity.",
+    ),
 ):
     """Run paper trading simulation with live prices and portfolio tracking."""
     from cli.paper_interactive import apply_paper_params_to_config, resolve_paper_params
@@ -1470,6 +1475,7 @@ def paper_cmd(
             live_mode=live,
             adaptive_enabled=adaptive,
             interactive=interactive,
+            fresh_start=fresh,
         )
     except BacktestValidationError as exc:
         console.print(f"[red]Paper trading configuration error:[/red]\n{exc}")
