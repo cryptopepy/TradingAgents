@@ -39,7 +39,7 @@ class TestPaperInteractive:
             interactive=False,
         )
         assert params.ticker == "BTC/USDT"
-        assert params.initial_equity == 100_000.0
+        assert params.initial_equity == 10_000.0
         assert params.strategy_name is None
         assert params.adaptive_enabled is True
 
