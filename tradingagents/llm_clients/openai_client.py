@@ -164,6 +164,8 @@ _PROVIDER_BASE_URL = {
     "minimax-cn": "https://api.minimaxi.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama":     "http://localhost:11434/v1",
+    "atlascloud": "https://api.atlascloud.ai/v1",
+    "local":      "http://localhost:11434/v1",
 }
 
 
@@ -180,6 +182,8 @@ def _resolve_provider_base_url(provider: str) -> Optional[str]:
         env_url = os.environ.get("OLLAMA_BASE_URL")
         if env_url:
             return env_url
+    if provider == "local":
+        return os.environ.get("LOCAL_LLM_BASE_URL") or _PROVIDER_BASE_URL["local"]
     return _PROVIDER_BASE_URL.get(provider)
 
 
@@ -223,6 +227,8 @@ class OpenAIClient(BaseLLMClient):
                         f"Please set the {api_key_env} environment variable "
                         f"(e.g. add {api_key_env}=your_key to your .env file)."
                     )
+            elif self.provider == "local":
+                llm_kwargs["api_key"] = os.environ.get("LOCAL_LLM_API_KEY", "local")
             else:
                 llm_kwargs["api_key"] = "ollama"
         elif self.base_url:

@@ -175,6 +175,28 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    "atlascloud": {
+        "quick": [
+            ("DeepSeek V4 Flash (AtlasCloud)", "deepseek-ai/deepseek-v4-flash"),
+            ("DeepSeek V3.2 (AtlasCloud)", "deepseek-ai/deepseek-chat"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("DeepSeek V4 Pro (AtlasCloud)", "deepseek-ai/deepseek-v4-pro"),
+            ("DeepSeek Reasoner (AtlasCloud)", "deepseek-ai/deepseek-reasoner"),
+            ("Custom model ID", "custom"),
+        ],
+    },
+    "local": {
+        "quick": [
+            ("LOCAL_LLM_MODEL_NAME or qwen3:latest", "qwen3:latest"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("LOCAL_LLM_MODEL_NAME or glm-4.7-flash:latest", "glm-4.7-flash:latest"),
+            ("Custom model ID", "custom"),
+        ],
+    },
 }
 
 

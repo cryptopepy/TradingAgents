@@ -30,8 +30,10 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     "minimax":    "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
-    # Local runtimes do not authenticate.
+    "atlascloud": "ATLASCLOUD_API_KEY",
+    # Local runtimes use a placeholder key when LOCAL_LLM_API_KEY is unset.
     "ollama":     None,
+    "local":      None,
 }
 
 

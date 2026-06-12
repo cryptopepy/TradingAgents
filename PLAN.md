@@ -4,7 +4,7 @@
 - Current Version: 0.3.0
 - Global Concurrency Strategy: Parallel Fan-Out
 - Asset Class: Crypto-only (no equities)
-- Last Active Task: CRYPTO-9/10 — stock branch cleanup & .env.example crypto keys
+- Last Active Task: Task-5 — Unified Custom LLM Providers (AtlasCloud, Local)
 
 ## High-Priority Epic: Crypto-Only Framework Transition
 
@@ -15,7 +15,7 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - [x] CRYPTO-3: State & CLI — `asset_type` defaults to `crypto`, remove stock/crypto mode selection
 - [x] CRYPTO-4: Analyst prompts & tools — perps/funding/OI, on-chain fundamentals, crypto sentiment/news
 - [x] CRYPTO-5: Backtest engine — 24/7/365 continuous tracking, no market-hours gaps
-- [x] CRYPTO-6: Tests — replace AAPL/NVDA/SPY fixtures with BTC/ETH/SOL pairs; pytest green (296 passed, 1 skipped: live DeepSeek)
+- [x] CRYPTO-6: Tests — replace AAPL/NVDA/SPY fixtures with BTC/ETH/SOL pairs; pytest green
 - [x] CRYPTO-7: Dependencies — remove yfinance; keep stockstats for indicator math on crypto OHLCV
 - [x] CRYPTO-8: Graph, risk guard, benchmark — BTC vs ETH baseline; end-to-end crypto symbols
 
@@ -33,9 +33,10 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - [x] Task-1: Core Path Unification & CLI Streaming Restructuring
 - [x] Task-2: Parallelizing Analyst Execution Nodes via LangGraph Fan-Out
 - [x] Task-3: Point-In-Time Historical Data Pipeline Correction (Fixing Look-Ahead Bias)
-- [x] Task-4: Mathematical Strategy Backtesting Engine Implementation (Placeholder API)
-- [x] Task-5: Programmatic Risk Guard and Veto Layer Enforcer
-- [x] Task-6: Structural Cleanup, Error Resilience, & Test Coverage Verification
+- [x] Task-4: Backtest Engine Integration (Historic-Crypto, strategies, optimization, UI)
+- [x] Task-5: Unified Custom LLM Providers (AtlasCloud, Local LLM)
+- [x] Task-6: Programmatic Risk Guard and Veto Layer Enforcer
+- [x] Task-7: Structural Cleanup, Error Resilience, & Test Coverage Verification
 
 ## Active Task Logs
 
@@ -53,14 +54,27 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - **Status:** Completed (superseded for crypto by `sentiment_pit.py` + historical sentiment guards)
 - Legacy equity publication-lag logic removed with stock dataflows
 
-### Task-4: Mathematical Strategy Backtesting Engine
+### Task-4: Backtest Engine Integration
 - **Status:** Completed
-- `tradingagents/backtest/engine.py`: RSI/MACD rules, 24/7 continuous bars, lookback `8h`/`24h`/`7d`
+- [x] `Historic-Crypto` dependency + `uv lock`
+- [x] `tradingagents/backtest/engine.py` — Historic_Crypto fetch, CSV cache, 8h/24h/7d horizons
+- [x] `tradingagents/backtest/strategies.py` — EMA, RSI, MACD, Bollinger (no LLM)
+- [x] Optimization loop — profit factor, Sharpe, max drawdown, net profit ratio; Pydantic schemas
+- [x] CLI dispatch — `backtest_report` section, `tradingagents backtest` command, post-analysis hook
+- [x] Live bridge — `LIVE_MODE` / `live_mode`, ccxt Binance ticker, `dummy_feed.py` fallback
+- [x] `tests/test_backtester.py` — synthetic series, strategy scoring
 
-### Task-5: Programmatic Risk Guard and Veto Layer
+### Task-5: Unified Custom LLM Providers
+- **Status:** Completed
+- [x] AtlasCloud.ai — `atlascloud` provider, `ATLASCLOUD_API_KEY`, `https://api.atlascloud.ai/v1`
+- [x] Local / Custom OpenAI — `local` provider, `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_API_KEY`, `LOCAL_LLM_MODEL_NAME`
+- [x] `factory.py`, `openai_client.py`, `api_key_env.py`, `model_catalog.py`, CLI provider table
+- [x] `.env.example` documentation
+
+### Task-6: Programmatic Risk Guard and Veto Layer
 - **Status:** Completed
 - `tradingagents/risk/guard.py` wired after Portfolio Manager
 
-### Task-6: Structural Cleanup, Error Resilience, & Test Coverage
+### Task-7: Structural Cleanup, Error Resilience, & Test Coverage
 - **Status:** Completed
 - `structured.py` fallback formatting; `tests/test_graph_e2e_integration.py` and crypto unit tests

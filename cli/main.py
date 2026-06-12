@@ -71,6 +71,7 @@ class MessageBuffer:
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
+        "backtest_report": (None, "Portfolio Manager"),
     }
 
     def __init__(self, max_length=100):
@@ -179,6 +180,7 @@ class MessageBuffer:
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
+                "backtest_report": "Backtest Optimization",
             }
             self.current_report = (
                 f"### {section_titles[latest_section]}\n{latest_content}"
@@ -225,6 +227,10 @@ class MessageBuffer:
         if self.report_sections.get("final_trade_decision"):
             report_parts.append("## Portfolio Management Decision")
             report_parts.append(f"{self.report_sections['final_trade_decision']}")
+
+        if self.report_sections.get("backtest_report"):
+            report_parts.append("## Backtest Optimization")
+            report_parts.append(f"{self.report_sections['backtest_report']}")
 
         self.final_report = "\n\n".join(report_parts) if report_parts else None
 
@@ -614,6 +620,13 @@ def get_user_selections():
         selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
         selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
 
+    if selected_llm_provider.lower() == "local":
+        local_model = os.environ.get("LOCAL_LLM_MODEL_NAME")
+        if local_model:
+            selected_shallow_thinker = local_model
+            selected_deep_thinker = local_model
+            console.print(f"[green]✓ Local model from LOCAL_LLM_MODEL_NAME:[/green] {local_model}")
+
     # Step 8: Provider-specific thinking configuration
     thinking_level = None
     reasoning_effort = None
@@ -983,7 +996,35 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_analysis(checkpoint: bool = False):
+def run_backtest_for_ticker(
+    ticker: str,
+    analysis_date: str,
+    config: dict | None = None,
+    *,
+    message_buffer_ref: MessageBuffer | None = None,
+) -> str:
+    """Run strategy optimization and return formatted summary markdown."""
+    from tradingagents.backtest import (
+        deploy_winning_strategy,
+        format_optimization_summary,
+        optimize_strategies,
+    )
+
+    cfg = config or DEFAULT_CONFIG.copy()
+    try:
+        optimization = optimize_strategies(ticker, analysis_date)
+        optimization = deploy_winning_strategy(optimization, cfg)
+        summary = format_optimization_summary(optimization)
+    except Exception as exc:
+        summary = f"Backtest optimization failed: {exc}"
+
+    if message_buffer_ref is not None:
+        message_buffer_ref.update_report_section("backtest_report", summary)
+        message_buffer_ref.add_message("System", "Backtest optimization complete")
+    return summary
+
+
+def run_analysis(checkpoint: bool = False, run_backtest: bool = True):
     # First get all user selections
     selections = get_user_selections()
 
@@ -1220,6 +1261,17 @@ def run_analysis(checkpoint: bool = False):
         )
         message_buffer.add_message("System", analyst_wall_time_tracker.format_summary())
 
+        if run_backtest:
+            message_buffer.add_message("System", "Running backtest optimization...")
+            update_display(layout, stats_handler=stats_handler, start_time=start_time)
+            run_backtest_for_ticker(
+                selections["ticker"],
+                selections["analysis_date"],
+                config,
+                message_buffer_ref=message_buffer,
+            )
+            update_display(layout, stats_handler=stats_handler, start_time=start_time)
+
         # Update final report sections
         for section in message_buffer.report_sections.keys():
             if section in final_state:
@@ -1230,6 +1282,14 @@ def run_analysis(checkpoint: bool = False):
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
+    if run_backtest and message_buffer.report_sections.get("backtest_report"):
+        console.print()
+        console.print(Panel(
+            Markdown(message_buffer.report_sections["backtest_report"]),
+            title="Backtest Optimization",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
 
     # Prompt to save report
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
@@ -1266,12 +1326,41 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    no_backtest: bool = typer.Option(
+        False,
+        "--no-backtest",
+        help="Skip post-analysis strategy backtest optimization.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+    run_analysis(checkpoint=checkpoint, run_backtest=not no_backtest)
+
+
+@app.command("backtest")
+def backtest_cmd(
+    ticker: str = typer.Option("BTC/USDT", "--ticker", "-t", help="Crypto pair"),
+    date: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="End date YYYY-MM-DD (default: today)",
+    ),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Use ccxt live prices for deployment bridge (sets live_mode).",
+    ),
+):
+    """Run strategy backtest optimization without full LLM analysis."""
+    analysis_date = date or datetime.datetime.now().strftime("%Y-%m-%d")
+    config = DEFAULT_CONFIG.copy()
+    if live:
+        config["live_mode"] = True
+    summary = run_backtest_for_ticker(ticker, analysis_date, config)
+    console.print(Panel(Markdown(summary), title="Backtest Optimization", border_style="cyan"))
 
 
 if __name__ == "__main__":
