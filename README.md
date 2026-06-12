@@ -25,14 +25,13 @@
 
 ---
 
-# TradingAgents: Multi-Agents LLM Financial Trading Framework
+# TradingAgents: Multi-Agents LLM Crypto Research & Trading Framework
 
 ## News
-- [2026-05] **TradingAgents v0.2.5** released with the grounded Sentiment Analyst, GPT-5.5 etc. model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability with API-key auto-detection, remote Ollama support, non-US alpha benchmarks, and ticker path-traversal hardening. See [CHANGELOG.md](CHANGELOG.md) for the full list.
-- [2026-04] **TradingAgents v0.2.4** released with structured-output agents (Research Manager, Trader, Portfolio Manager), LangGraph checkpoint resume, persistent decision log, DeepSeek/Qwen/GLM/Azure provider support, Docker, and a Windows UTF-8 encoding fix.
-- [2026-03] **TradingAgents v0.2.3** released with multi-language support, GPT-5.4 family models, unified model catalog, backtesting date fidelity, and proxy support.
-- [2026-03] **TradingAgents v0.2.2** released with GPT-5.4/Gemini 3.1/Claude 4.6 model coverage, five-tier rating scale, OpenAI Responses API, Anthropic effort control, and cross-platform stability.
-- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
+- [2026-06] **TradingAgents v0.3.0** — crypto-only refactor: CoinGecko/Binance/CryptoCompare data layer, crypto-native analyst prompts (perps, on-chain, LunarCrush sentiment), Historic-Crypto backtest engine with four TA strategies, AtlasCloud and Local LLM providers, and BTC/ETH alpha benchmarks. See [PLAN.md](PLAN.md) for implementation status.
+- [2026-05] **TradingAgents v0.2.5** — grounded Sentiment Analyst, GPT-5.5 model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability, remote Ollama support, and ticker path-traversal hardening. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+- [2026-04] **TradingAgents v0.2.4** — structured-output agents, LangGraph checkpoint resume, persistent decision log, DeepSeek/Qwen/GLM/Azure provider support, Docker, and a Windows UTF-8 encoding fix.
+- [2026-02] **TradingAgents v0.2.0** — multi-provider LLM support and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
 
 <div align="center">
@@ -51,27 +50,27 @@
 
 <div align="center">
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 📈 [Backtesting](#backtesting) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
 
 </div>
 
 ## TradingAgents Framework
 
-TradingAgents is a multi-agent trading framework that mirrors the dynamics of real-world trading firms. By deploying specialized LLM-powered agents: from fundamental analysts, sentiment experts, and technical analysts, to trader, risk management team, the platform collaboratively evaluates market conditions and informs trading decisions. Moreover, these agents engage in dynamic discussions to pinpoint the optimal strategy.
+TradingAgents is a multi-agent cryptocurrency research and trading framework that mirrors the dynamics of real-world crypto trading desks. By deploying specialized LLM-powered agents — from market and on-chain analysts to sentiment and news researchers, through trader and risk management teams — the platform collaboratively evaluates 24/7 crypto markets and informs trading decisions. Agents engage in dynamic discussions to pinpoint the optimal strategy.
 
 <p align="center">
   <img src="assets/schema.png" style="width: 100%; height: auto;">
 </p>
 
-> TradingAgents framework is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
+> TradingAgents is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, data quality, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
 
-Our framework decomposes complex trading tasks into specialized roles.
+Our framework decomposes complex crypto trading tasks into specialized roles.
 
 ### Analyst Team
-- Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood.
-- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
-- Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
+- **Market Analyst**: Covers perpetual and spot markets — funding rates, open interest, basis vs spot, and technical indicators (RSI, MACD, Bollinger, ATR) on crypto OHLCV. Flags extreme funding and squeeze risk.
+- **Fundamentals Analyst**: Evaluates on-chain and token-level metrics — TVL, FDV, market cap rank, tokenomics, and protocol revenue. No equity fundamentals (no P/E, EPS, or SEC filings).
+- **Sentiment Analyst**: Aggregates LunarCrush galaxy score and social volume, crypto news headlines, and Reddit crypto communities into a grounded sentiment read.
+- **News Analyst**: Monitors protocol upgrades, regulatory headlines, ETF flows, exchange events, hacks/exploits, and macro drivers (rates, USD liquidity) relevant to the target pair.
 
 <p align="center">
   <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
@@ -93,7 +92,7 @@ Our framework decomposes complex trading tasks into specialized roles.
 
 ### Risk Management and Portfolio Manager
 - Continuously evaluates portfolio risk by assessing market volatility, liquidity, and other risk factors. The risk management team evaluates and adjusts trading strategies, providing assessment reports to the Portfolio Manager for final decision.
-- The Portfolio Manager approves/rejects the transaction proposal. If approved, the order will be sent to the simulated exchange and executed.
+- The Portfolio Manager approves/rejects the transaction proposal. A programmatic risk guard can veto proposals that breach configured limits (stop distance, position size, VaR, concentration).
 
 <p align="center">
   <img src="assets/risk.png" width="70%" style="display: inline-block; margin: 0 2%;">
@@ -150,36 +149,56 @@ export ZHIPU_CN_API_KEY=...        # GLM via BigModel (China, open.bigmodel.cn)
 export MINIMAX_API_KEY=...         # MiniMax — Global (api.minimax.io, M2.x, 204K ctx)
 export MINIMAX_CN_API_KEY=...      # MiniMax — China (api.minimaxi.com, M2.x, 204K ctx)
 export OPENROUTER_API_KEY=...      # OpenRouter
-export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
+export ATLASCLOUD_API_KEY=...      # AtlasCloud (DeepSeek V4 and more)
+```
+
+**AtlasCloud** — set `TRADINGAGENTS_LLM_PROVIDER=atlascloud` and `ATLASCLOUD_API_KEY`. Default endpoint: `https://api.atlascloud.ai/v1`.
+
+**Local / custom OpenAI-compatible endpoint** — set `TRADINGAGENTS_LLM_PROVIDER=local` plus:
+```bash
+export LOCAL_LLM_BASE_URL=http://localhost:11434/v1   # Ollama, LM Studio, vLLM, etc.
+export LOCAL_LLM_API_KEY=local                       # placeholder if the server ignores auth
+export LOCAL_LLM_MODEL_NAME=qwen3:latest             # used for both quick and deep agents
 ```
 
 For enterprise providers (e.g. Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in your credentials.
 
-For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
+For Ollama via the dedicated provider, configure `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash
 cp .env.example .env
 ```
 
+`.env.example` also documents optional crypto data keys (`COINGECKO_API_KEY`, `LUNARCRUSH_API_KEY`, `CRYPTOCOMPARE_API_KEY`) and `TRADINGAGENTS_*` overrides. Binance public REST endpoints require no key for spot OHLCV and USD-M perps data.
+
 ### CLI Usage
 
-Launch the interactive CLI:
+Launch the interactive analysis CLI:
 ```bash
-tradingagents          # installed command
-python -m cli.main     # alternative: run directly from source
+tradingagents analyze          # installed command
+python -m cli.main analyze     # alternative: run directly from source
 ```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
-### Markets and tickers
+You will see a screen where you can select your crypto pair, analysis date, LLM provider, research depth, and more.
 
-TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.
+Skip the post-analysis backtest with `--no-backtest`:
+```bash
+tradingagents analyze --no-backtest
+```
 
-- US: `AAPL`, `SPY`
-- Hong Kong: `0700.HK` · Tokyo: `7203.T` · London: `AZN.L`
-- India: `RELIANCE.NS`, `.BO` · Canada: `.TO` · Australia: `.AX`
-- China A-shares: Shanghai `.SS`, Shenzhen `.SZ` (e.g. `600519.SS` for Kweichow Moutai)
-- Crypto: `BTC-USD`, `ETH-USD`
+Enable checkpoint resume or clear saved checkpoints:
+```bash
+tradingagents analyze --checkpoint
+tradingagents analyze --clear-checkpoints
+```
+
+### Crypto pairs
+
+TradingAgents accepts normalized crypto pair symbols. Examples:
+
+- `BTC/USDT`, `ETH/USDT` — spot-style pairs (Binance routing)
+- `ETH/USDC`, `SOL/USD` — alternate quote currencies
 
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
@@ -195,15 +214,66 @@ An interface will appear showing results as they load, letting you track the age
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
 
+## Backtesting
+
+TradingAgents includes a pure-code backtest engine (no LLM) that complements the multi-agent analysis pipeline. It fetches intraday crypto history via [Historic-Crypto](https://github.com/AminHP/gym-mtsim) (Coinbase candles), caches CSV locally, and evaluates four technical strategies across **8h**, **24h**, and **7d** lookback horizons:
+
+| Strategy | Description |
+|---|---|
+| EMA crossover | Fast vs slow exponential moving average cross |
+| RSI mean reversion | Oversold/overbought RSI thresholds |
+| MACD crossover | MACD line vs signal line |
+| Bollinger mean reversion | Price vs upper/lower bands |
+
+The optimization loop runs every strategy on every horizon, scores each run by **net profit ratio**, and reports **profit factor**, **Sharpe ratio**, **max drawdown**, and trade count for the winner. After analysis completes, the CLI automatically runs this optimization and appends a **Backtest Optimization** section to the report (disable with `--no-backtest`).
+
+### Standalone backtest command
+
+Run optimization without the full LLM analysis:
+```bash
+tradingagents backtest --ticker BTC/USDT --date 2026-01-15
+tradingagents backtest -t ETH/USDT -d 2026-01-15
+```
+
+Omit `--date` to use today.
+
+### Live price bridge
+
+After optimization, the engine can bridge the winning strategy to a current price feed:
+
+- **Paper mode (default)** — `dummy_feed` mutates from the last historical bar.
+- **Live mode** — ccxt Binance ticker for real-time prices.
+
+Enable live mode via CLI flag or environment:
+```bash
+tradingagents backtest --ticker BTC/USDT --date 2026-01-15 --live
+export LIVE_MODE=1
+# or
+export TRADINGAGENTS_LIVE_MODE=true
+```
+
 ## TradingAgents Package
 
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
+We built TradingAgents with LangGraph to ensure flexibility and modularity. Analyst nodes fan out in parallel (configurable via `analyst_concurrency_limit`). The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, **AtlasCloud**, **Local** (any OpenAI-compatible endpoint), Ollama for local models, and Azure OpenAI for enterprise.
+
+### Data vendors
+
+Crypto market data routes through a vendor layer (`route_to_vendor` in `tradingagents/dataflows/`):
+
+| Category | Default vendors | Notes |
+|---|---|---|
+| OHLCV / indicators | Binance, CryptoCompare | CryptoCompare as fallback; optional `CRYPTOCOMPARE_API_KEY` |
+| Fundamentals / tokenomics | CoinGecko | Optional `COINGECKO_API_KEY` for Pro rate limits |
+| News | CryptoCompare, LunarCrush | Optional keys for higher limits and galaxy-score sentiment |
+| Perps (funding, OI) | Binance | Public USD-M endpoints, no key required |
+
+Override defaults in `DEFAULT_CONFIG["data_vendors"]` or per-tool via `tool_vendors`.
 
 ### Python Usage
 
-To use TradingAgents inside your code, you can import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision. You can run `main.py`, here's also a quick example:
+To use TradingAgents inside your code, import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision:
 
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -212,7 +282,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
 
 # forward propagate
-_, decision = ta.propagate("NVDA", "2026-01-15")
+_, decision = ta.propagate("BTC/USDT", "2026-01-15", asset_type="crypto")
 print(decision)
 ```
 
@@ -223,14 +293,24 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
 config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # openai, google, anthropic, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, ollama, azure
+config["llm_provider"] = "openai"        # openai, google, anthropic, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, atlascloud, local, ollama, azure
 config["deep_think_llm"] = "gpt-5.5"     # Model for complex reasoning
 config["quick_think_llm"] = "gpt-5.4-mini" # Model for quick tasks
 config["max_debate_rounds"] = 2
 
 ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
+_, decision = ta.propagate("ETH/USDT", "2026-01-15", asset_type="crypto")
 print(decision)
+```
+
+Run backtest optimization programmatically:
+```python
+from tradingagents.backtest import optimize_strategies, deploy_winning_strategy, format_optimization_summary
+from tradingagents.default_config import DEFAULT_CONFIG
+
+result = optimize_strategies("BTC/USDT", "2026-01-15")
+result = deploy_winning_strategy(result, DEFAULT_CONFIG)
+print(format_optimization_summary(result))
 ```
 
 See `tradingagents/default_config.py` for all configuration options.
@@ -241,9 +321,9 @@ TradingAgents persists two kinds of state across runs.
 
 ### Decision log
 
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
+The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs the crypto benchmark — e.g. ETH/USDT when analyzing BTC), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
 
-Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
+Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`. Override the benchmark with `TRADINGAGENTS_BENCHMARK_TICKER`.
 
 ### Checkpoint resume
 
@@ -260,7 +340,7 @@ tradingagents analyze --clear-checkpoints    # reset before running
 config = DEFAULT_CONFIG.copy()
 config["checkpoint_enabled"] = True
 ta = TradingAgentsGraph(config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
+_, decision = ta.propagate("BTC/USDT", "2026-01-15", asset_type="crypto")
 ```
 
 ## Reproducibility
@@ -269,7 +349,7 @@ TradingAgents is LLM-driven, so two runs of the same ticker and date can differ.
 
 Language model sampling is non-deterministic. Even at a fixed temperature, providers do not guarantee byte-identical output across calls, and reasoning models (the default GPT-5.x family, and any thinking-mode model) vary the most because their internal reasoning is itself sampled.
 
-Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
+Live data moves. Crypto news, LunarCrush sentiment, and Reddit posts return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
 
 To reduce variation you can lower the sampling temperature. Set `temperature` in your config (or `TRADINGAGENTS_TEMPERATURE` in `.env`); lower values make models that honor it more repeatable. Reasoning models largely ignore temperature, so for tighter reproducibility pair a low temperature with a non-reasoning model such as `gpt-4.1`.
 
@@ -281,9 +361,9 @@ config["quick_think_llm"] = "gpt-4.1"
 config["temperature"] = 0.0
 ```
 
-What does not vary anymore: the analyzed company identity is resolved deterministically from the ticker before any agent runs, and the market analyst grounds exact price and indicator claims in a verified data snapshot. Earlier reports of "different companies" or fabricated price levels across runs are addressed by these two mechanisms.
+What does not vary anymore: the analyzed instrument identity is resolved deterministically from the ticker before any agent runs, and the market analyst grounds exact price and indicator claims in a verified data snapshot.
 
-Backtest results are not guaranteed to match any published figure. Returns depend on the model, the temperature, the date range, data quality, and the sampling above. Treat the framework as a research scaffold for studying multi-agent analysis, not as a strategy with a fixed, replicable return.
+Backtest results are not guaranteed to match any published figure. Returns depend on the model, the temperature, the date range, data quality, and the sampling above. Treat the framework as a research scaffold for studying multi-agent crypto analysis, not as a strategy with a fixed, replicable return.
 
 ## Contributing
 
