@@ -1419,14 +1419,19 @@ def backtest_cmd(
 
 @app.command("paper")
 def paper_cmd(
-    ticker: str = typer.Option("BTC/USDT", "--ticker", "-t", help="Crypto pair"),
+    ticker: Optional[str] = typer.Option(
+        None,
+        "--ticker",
+        "-t",
+        help="Crypto pair (prompted when omitted in interactive mode).",
+    ),
     live: bool = typer.Option(
         False,
         "--live",
         help="Enable Binance ccxt fallback when CryptoCompare/CoinGecko unavailable.",
     ),
-    adaptive: bool = typer.Option(
-        True,
+    adaptive: Optional[bool] = typer.Option(
+        None,
         "--adaptive/--no-adaptive",
         help="Re-run backtests and switch strategy on sustained drawdown.",
     ),
@@ -1440,27 +1445,44 @@ def paper_cmd(
         "--strategy",
         help="Strategy name from registry (default: run backtest to pick winner).",
     ),
-    equity: float = typer.Option(
-        10_000.0,
+    equity: Optional[float] = typer.Option(
+        None,
         "--equity",
-        help="Starting portfolio equity in USD.",
+        help="Starting portfolio equity in USD (default: 100000).",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Prompt for missing parameters (default on TTY).",
     ),
 ):
     """Run paper trading simulation with live prices and portfolio tracking."""
+    from cli.paper_interactive import apply_paper_params_to_config, resolve_paper_params
     from cli.paper_trading import run_paper_session
+    from tradingagents.backtest import BacktestValidationError
 
-    config = DEFAULT_CONFIG.copy()
-    config["paper_trade_enabled"] = True
-    config["paper_initial_equity"] = equity
-    config["paper_adaptive_enabled"] = adaptive
-    if live:
-        config["live_mode"] = True
+    try:
+        params = resolve_paper_params(
+            ticker=ticker,
+            strategy_name=strategy,
+            equity=equity,
+            ticks=ticks,
+            live_mode=live,
+            adaptive_enabled=adaptive,
+            interactive=interactive,
+        )
+    except BacktestValidationError as exc:
+        console.print(f"[red]Paper trading configuration error:[/red]\n{exc}")
+        raise typer.Exit(1) from exc
+
+    config = apply_paper_params_to_config(params, DEFAULT_CONFIG.copy())
     run_paper_session(
-        ticker,
+        params.ticker,
         config,
-        ticks=ticks,
-        adaptive=adaptive,
-        strategy_name=strategy,
+        ticks=params.ticks,
+        adaptive=params.adaptive_enabled,
+        strategy_name=params.strategy_name,
+        lookback=params.lookback,
     )
 
 

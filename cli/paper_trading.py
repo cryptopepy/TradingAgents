@@ -6,7 +6,6 @@ import signal
 import sys
 from typing import Optional
 
-import questionary
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -137,28 +136,14 @@ def run_paper_session(
 
 
 def prompt_paper_options(config: dict) -> dict:
-    """Interactive paper-trading options."""
-    adaptive = questionary.confirm(
-        "Enable adaptive strategy switching on sustained losses?",
-        default=bool(config.get("paper_adaptive_enabled", True)),
-    ).ask()
-    ticks_str = questionary.text(
-        "Number of ticks (empty = run until Ctrl+C):",
-        default="",
-    ).ask() or ""
-    ticks = int(ticks_str) if ticks_str.strip().isdigit() else None
-    window = questionary.text(
-        "Drawdown review window (minutes):",
-        default=str(config.get("drawdown_time_window_minutes", config.get("paper_loss_review_minutes", 60))),
-    ).ask()
-    threshold = questionary.text(
-        "Max allowed drawdown % (e.g. 5.0):",
-        default=str(config.get("max_allowed_drawdown_pct", config.get("paper_loss_threshold_pct", 5.0))),
-    ).ask()
-    if window:
-        config["drawdown_time_window_minutes"] = float(window)
-        config["paper_loss_review_minutes"] = float(window)
-    if threshold:
-        config["max_allowed_drawdown_pct"] = float(threshold)
-        config["paper_loss_threshold_pct"] = float(threshold)
+    """Interactive paper-trading options (post-analysis deploy flow)."""
+    from cli.paper_interactive import _prompt_adaptive_settings, _prompt_ticks
+
+    adaptive, window, threshold = _prompt_adaptive_settings(config)
+    config["drawdown_time_window_minutes"] = window
+    config["paper_loss_review_minutes"] = window
+    config["max_allowed_drawdown_pct"] = threshold
+    config["paper_loss_threshold_pct"] = threshold
+    config["paper_adaptive_enabled"] = adaptive
+    ticks = _prompt_ticks()
     return {"adaptive": adaptive, "ticks": ticks}

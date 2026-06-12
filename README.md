@@ -102,10 +102,14 @@ Bare `tradingagents backtest` on a TTY walks through pair, end date, horizons (8
 **Standalone paper trading** (no LLM):
 
 ```bash
+tradingagents paper                                        # interactive prompts (TTY)
 tradingagents paper --ticker BTC/USDT                    # backtest picks strategy, then sim
 tradingagents paper -t ETH/USDT --strategy rsi_mean_reversion --equity 5000
 tradingagents paper -t SOL/USDT --live --no-adaptive --ticks 20
+tradingagents paper --no-interactive -t BTC/USDT --equity 100000
 ```
+
+Bare `tradingagents paper` on a TTY walks through pair, strategy (auto backtest or fixed registry name), starting equity ($100k default), tick count, live-mode fallback, and adaptive drawdown settings. Use `--no-interactive` in scripts when all flags are provided.
 
 Interactive `analyze` prompts for pair, date, analysts, research depth, and LLM provider. After the Portfolio Manager report, the post-analysis menu loops:
 
@@ -118,7 +122,7 @@ Interactive `analyze` prompts for pair, date, analysts, research depth, and LLM 
 
 ## Backtesting
 
-Pure-code engine: fetches intraday history via [Historic-Crypto](https://github.com/AminHP/gym-mtsim) (Coinbase candles), caches CSV locally, runs **24/7** (no equity session gaps). Signals are converted to fills through the paper-trading layer below.
+Pure-code engine: fetches intraday OHLCV via **CryptoCompare** (`histominute` / `histohour`) → **Binance klines** → **ccxt** when `--live`, caches CSV locally, runs **24/7** (no equity session gaps). Historic-Crypto is not used (its Coinbase Pro dependency was removed). On fetch failure you get a `BacktestDataError` with vendor diagnostics — set `TRADINGAGENTS_DEBUG=1` for a full traceback. Signals are converted to fills through the paper-trading layer below.
 
 ### Strategies (A–J)
 
