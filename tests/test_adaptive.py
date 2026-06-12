@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor
+from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
 
 
 @pytest.mark.unit
@@ -33,6 +33,37 @@ class TestAdaptiveStrategyMonitor:
         assert monitor.should_rebacktest(start + timedelta(minutes=20)) is False
         assert monitor.should_rebacktest(start + timedelta(minutes=35)) is True
 
+    def test_effective_window_uses_max_of_configured_and_since_last_review(self):
+        monitor = AdaptiveStrategyMonitor(loss_review_minutes=60, initial_equity=10_000.0)
+        now = datetime(2026, 6, 12, 14, 0, tzinfo=timezone.utc)
+
+        assert monitor.effective_review_window_minutes(now) == 60.0
+
+        monitor.note_drawdown_review(now - timedelta(minutes=10))
+        assert monitor.effective_review_window_minutes(now) == 60.0
+
+        monitor.note_drawdown_review(now - timedelta(minutes=90))
+        assert monitor.effective_review_window_minutes(now) == 90.0
+
+    def test_should_rebacktest_uses_effective_window(self):
+        monitor = AdaptiveStrategyMonitor(
+            loss_review_minutes=60,
+            loss_threshold_pct=5.0,
+            initial_equity=10_000.0,
+        )
+        start = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+        monitor.note_drawdown_review(start - timedelta(minutes=90))
+        monitor.record_equity(10_000.0, start)
+        monitor.record_equity(9_400.0, start + timedelta(minutes=5))
+
+        assert monitor.should_rebacktest(start + timedelta(minutes=90)) is False
+        assert monitor.should_rebacktest(start + timedelta(minutes=100)) is True
+
+    def test_format_last_drawdown_review(self):
+        assert format_last_drawdown_review(None) == "Never"
+        assert format_last_drawdown_review(0.5) == "<1m ago"
+        assert format_last_drawdown_review(12.4) == "12m ago"
+
     def test_mark_rebacktest_resets_timer(self):
         monitor = AdaptiveStrategyMonitor(
             loss_review_minutes=10,
@@ -42,9 +73,10 @@ class TestAdaptiveStrategyMonitor:
         now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
         monitor.record_equity(9_000.0, now)
         assert monitor.should_rebacktest(now + timedelta(minutes=15)) is True
-        monitor.mark_rebacktest_done()
+        monitor.mark_rebacktest_done(now + timedelta(minutes=15))
         assert monitor.should_rebacktest(now + timedelta(minutes=15)) is False
         assert monitor.rebacktest_count == 1
+        assert monitor.last_drawdown_review_at == now + timedelta(minutes=15)
 
 
 @pytest.mark.unit

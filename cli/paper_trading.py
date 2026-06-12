@@ -34,6 +34,11 @@ def render_paper_state_table(state: PaperTradingState) -> Table:
     pnl_style = "green" if state.pnl >= 0 else "red"
     table.add_row("PnL", f"[{pnl_style}]${state.pnl:,.2f} ({state.pnl_pct:+.2f}%)[/{pnl_style}]")
     table.add_row("Drawdown", f"{state.drawdown_pct:.2f}%")
+    table.add_row("Last DD review", state.last_drawdown_review)
+    table.add_row(
+        "DD review window",
+        f"{state.effective_drawdown_window_minutes:.0f}m",
+    )
     table.add_row("Position", state.open_position or "flat")
     table.add_row("Adaptive re-tests", str(state.rebacktest_count))
     return table

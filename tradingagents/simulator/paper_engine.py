@@ -20,7 +20,7 @@ from tradingagents.backtest.portfolio import VirtualPortfolio
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price
-from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor
+from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
 from tradingagents.simulator.core import (
     PaperTradingSession,
     StrategySignal,
@@ -55,6 +55,8 @@ class PaperTradingState:
     price_source: str
     drawdown_pct: float
     rebacktest_count: int
+    last_drawdown_review: str = "Never"
+    effective_drawdown_window_minutes: float = 0.0
     open_position: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -79,6 +81,7 @@ class PaperTradingEngine:
 
         equity = session.initial_equity or float(self.config.get("paper_initial_equity", 10_000.0))
         fee_bps = float(session.slippage_bps)
+        self._pending_last_drawdown_review_at: Optional[datetime] = None
         self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
         self._restore_persisted_session()
         self.matcher = SimulatedMatcher(slippage_bps=session.slippage_bps, portfolio=self.portfolio)
@@ -105,6 +108,9 @@ class PaperTradingEngine:
             loss_threshold_pct=threshold_pct,
             initial_equity=self.portfolio.initial_equity,
         )
+        if self._pending_last_drawdown_review_at is not None:
+            self._adaptive.note_drawdown_review(self._pending_last_drawdown_review_at)
+            self._pending_last_drawdown_review_at = None
 
     @property
     def tick_history(self) -> List[TickEvaluationResult]:
@@ -152,6 +158,16 @@ class PaperTradingEngine:
         self.session.lookback = saved.get("lookback", self.session.lookback)
         self.session.parameters = dict(saved.get("parameters") or self.session.parameters)
         self.session.signal = StrategySignal.from_string(saved.get("signal", self.session.signal.value))
+        extra = saved.get("extra") or {}
+        last_review = extra.get("last_drawdown_review_at")
+        if last_review:
+            try:
+                parsed = datetime.fromisoformat(str(last_review).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                self._pending_last_drawdown_review_at = parsed
+            except ValueError:
+                logger.warning("Ignoring invalid last_drawdown_review_at: %s", last_review)
 
     def _persist_session(self, quote: LivePrice) -> None:
         if not self.config.get("paper_state_persistence", True):
@@ -163,7 +179,15 @@ class PaperTradingEngine:
             signal=self.session.signal.value,
             portfolio=self.portfolio,
             parameters=self.session.parameters,
-            extra={"price": quote.price, "price_source": quote.source.value},
+            extra={
+                "price": quote.price,
+                "price_source": quote.source.value,
+                "last_drawdown_review_at": (
+                    self._adaptive.last_drawdown_review_at.isoformat()
+                    if self._adaptive.last_drawdown_review_at is not None
+                    else None
+                ),
+            },
             config=self.config,
         )
 
@@ -210,6 +234,7 @@ class PaperTradingEngine:
 
     def _run_adaptive_rebacktest(self, now: datetime) -> None:
         """Re-run optimization and switch strategy when a better one is found."""
+        self._adaptive.note_drawdown_review(now)
         end_date = now.strftime("%Y-%m-%d")
         logger.info(
             "Adaptive re-backtest triggered for %s (drawdown %.2f%%)",
@@ -225,7 +250,7 @@ class PaperTradingEngine:
             return
 
         if optimization.winner is None:
-            self._adaptive.mark_rebacktest_done()
+            self._adaptive.mark_rebacktest_done(now)
             self._signals_halted = False
             return
 
@@ -248,7 +273,7 @@ class PaperTradingEngine:
                 self.on_strategy_switch(old_name, new_name)
             self._log_autonomous_rotation(old_name, new_name)
 
-        self._adaptive.mark_rebacktest_done()
+        self._adaptive.mark_rebacktest_done(now)
         self._signals_halted = False
 
     def get_state(self, quote: Optional[LivePrice] = None) -> PaperTradingState:
@@ -261,6 +286,9 @@ class PaperTradingEngine:
             pos_desc = "long" if pos["side"] > 0 else "short"
         pnl = self.portfolio.equity - self.portfolio.initial_equity
         pnl_pct = (pnl / self.portfolio.initial_equity * 100.0) if self.portfolio.initial_equity else 0.0
+        now = quote.timestamp
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
         return PaperTradingState(
             symbol=self.session.symbol,
             strategy_name=self.session.strategy_name,
@@ -275,6 +303,10 @@ class PaperTradingEngine:
             price_source=quote.source.value,
             drawdown_pct=self._adaptive.current_drawdown_pct(),
             rebacktest_count=self._adaptive.rebacktest_count,
+            last_drawdown_review=format_last_drawdown_review(
+                self._adaptive.minutes_since_last_drawdown_review(now)
+            ),
+            effective_drawdown_window_minutes=self._adaptive.effective_review_window_minutes(now),
             open_position=pos_desc,
         )
 

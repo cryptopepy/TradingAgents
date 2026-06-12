@@ -11,6 +11,15 @@ from typing import Deque, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def format_last_drawdown_review(minutes_since: Optional[float]) -> str:
+    """Human-readable label for time since the last drawdown review."""
+    if minutes_since is None:
+        return "Never"
+    if minutes_since < 1:
+        return "<1m ago"
+    return f"{int(minutes_since)}m ago"
+
+
 @dataclass
 class AdaptiveStrategyMonitor:
     """Track equity drawdown over a rolling window and trigger re-backtests."""
@@ -22,6 +31,7 @@ class AdaptiveStrategyMonitor:
     _losing_since: Optional[datetime] = field(default=None, init=False)
     _samples: Deque[Tuple[datetime, float]] = field(default_factory=deque, init=False)
     _rebacktest_count: int = field(default=0, init=False)
+    _last_drawdown_review_at: Optional[datetime] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._peak_equity = self.initial_equity
@@ -33,6 +43,29 @@ class AdaptiveStrategyMonitor:
     @property
     def rebacktest_count(self) -> int:
         return self._rebacktest_count
+
+    @property
+    def last_drawdown_review_at(self) -> Optional[datetime]:
+        return self._last_drawdown_review_at
+
+    def minutes_since_last_drawdown_review(
+        self, now: Optional[datetime] = None
+    ) -> Optional[float]:
+        if self._last_drawdown_review_at is None:
+            return None
+        ts = now or datetime.now(timezone.utc)
+        return (ts - self._last_drawdown_review_at).total_seconds() / 60.0
+
+    def effective_review_window_minutes(self, now: Optional[datetime] = None) -> float:
+        """Configured window extended by time since the last drawdown review."""
+        since = self.minutes_since_last_drawdown_review(now)
+        if since is None:
+            return self.loss_review_minutes
+        return max(self.loss_review_minutes, since)
+
+    def note_drawdown_review(self, timestamp: Optional[datetime] = None) -> None:
+        """Record that a drawdown review cycle ran at ``timestamp``."""
+        self._last_drawdown_review_at = timestamp or datetime.now(timezone.utc)
 
     def record_equity(self, equity: float, timestamp: Optional[datetime] = None) -> None:
         """Append an equity sample and update drawdown tracking."""
@@ -49,17 +82,19 @@ class AdaptiveStrategyMonitor:
             self._losing_since = None
 
     def should_rebacktest(self, now: Optional[datetime] = None) -> bool:
-        """True when drawdown exceeds threshold for ``loss_review_minutes``."""
+        """True when drawdown exceeds threshold for the effective review window."""
         if self._losing_since is None:
             return False
         ts = now or datetime.now(timezone.utc)
         elapsed = (ts - self._losing_since).total_seconds()
-        return elapsed >= self.loss_review_minutes * 60.0
+        window_minutes = self.effective_review_window_minutes(self._losing_since)
+        return elapsed >= window_minutes * 60.0
 
-    def mark_rebacktest_done(self) -> None:
+    def mark_rebacktest_done(self, timestamp: Optional[datetime] = None) -> None:
         """Reset losing timer after a successful re-backtest cycle."""
         self._rebacktest_count += 1
         self._losing_since = None
+        self.note_drawdown_review(timestamp)
         if self._samples:
             self._peak_equity = self._samples[-1][1]
 
@@ -74,6 +109,7 @@ class AdaptiveStrategyMonitor:
         return max(0.0, (self._peak_equity - equity) / self._peak_equity * 100.0)
 
     def _prune_old_samples(self, now: datetime) -> None:
-        cutoff = now - timedelta(minutes=self.loss_review_minutes * 2)
+        window = self.effective_review_window_minutes(now)
+        cutoff = now - timedelta(minutes=window * 2)
         while self._samples and self._samples[0][0] < cutoff:
             self._samples.popleft()

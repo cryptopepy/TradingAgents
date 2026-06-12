@@ -107,6 +107,31 @@ class TestPaperTradingEngine:
         assert tick_count == 1
         assert elapsed < 2.0
 
+    @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
+    @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
+    def test_state_includes_last_drawdown_review(self, mock_price, _signal):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+        mock_price.return_value = LivePrice(
+            symbol="BTC/USDT",
+            price=50_000.0,
+            source=PriceSource.CRYPTOCOMPARE,
+            timestamp=now,
+        )
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        engine = PaperTradingEngine(session, adaptive_enabled=True)
+        engine._adaptive.note_drawdown_review(now - timedelta(minutes=12))
+        state = engine.get_state()
+
+        assert state.last_drawdown_review == "12m ago"
+        assert state.effective_drawdown_window_minutes == pytest.approx(60.0)
+
     def test_fresh_start_ignores_saved_session(self, tmp_path):
         from tradingagents.simulator.persistence import save_paper_session
 
