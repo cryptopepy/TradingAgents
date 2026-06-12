@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated, Optional
 
 from .config import get_config
 from .coingecko import resolve_coin_id
 from .crypto_common import http_get_json, no_data_message
+from .date_window import article_date_in_range, lookback_start
 from .cryptocompare import get_cryptocompare_news
 from .symbol_utils import parse_crypto_pair
 
@@ -34,9 +35,19 @@ def get_crypto_news(
                 params={"per_page": 20},
             )
             updates = data.get("status_updates") or []
-            lines = [f"# CoinGecko status updates for {pair.display}", ""]
-            for upd in updates[:15]:
+            lines = [f"# CoinGecko status updates for {pair.display} ({start_date} to {end_date})", ""]
+            for upd in updates:
+                created = upd.get("created_at")
+                if created:
+                    try:
+                        published = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        if not article_date_in_range(published, start_date, end_date):
+                            continue
+                    except ValueError:
+                        pass
                 lines.append(f"- {upd.get('description', '')[:300]}")
+                if len(lines) > 16:
+                    break
             if len(lines) > 2:
                 return "\n".join(lines)
     except Exception as exc:
@@ -54,7 +65,7 @@ def get_crypto_global_news(
     config = get_config()
     days = look_back_days if look_back_days is not None else config.get("global_news_lookback_days", 7)
     article_limit = limit if limit is not None else config.get("global_news_article_limit", 10)
-    start = (datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
+    start = lookback_start(curr_date, days)
 
     queries = config.get("global_news_queries") or [
         "bitcoin ETF flows regulation",
@@ -75,13 +86,11 @@ def get_crypto_global_news(
             headers=_headers(),
         )
         articles = data.get("Data") or []
-        start_dt = datetime.strptime(start, "%Y-%m-%d")
-        end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
         keywords = " ".join(queries).lower().split()
 
         for art in articles:
             published = datetime.utcfromtimestamp(art.get("published_on", 0))
-            if published < start_dt or published > end_dt:
+            if not article_date_in_range(published, start, curr_date):
                 continue
             title = (art.get("title") or "").lower()
             body = (art.get("body") or "").lower()

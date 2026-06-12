@@ -48,7 +48,7 @@ Bull Analyst: ETH/USDT spot ETF inflows and L2 activity support upside.
 Bear Analyst: Macro risk and elevated funding rates argue for caution.
 """
 
-SMOKE_TICKER = "ETH/USDT"
+SMOKE_TICKER = os.environ.get("SMOKE_TICKER", "BTC/USDT")
 
 
 def _make_rm_state():
@@ -106,7 +106,14 @@ def main() -> int:
     parser.add_argument("provider", choices=list(PROVIDER_DEFAULTS.keys()))
     parser.add_argument("--deep-model", default=None, help="Override deep_think_llm")
     parser.add_argument("--quick-model", default=None, help="Override quick_think_llm")
+    parser.add_argument(
+        "--ticker",
+        default=os.environ.get("SMOKE_TICKER", "BTC/USDT"),
+        help="Crypto pair for smoke state (env: SMOKE_TICKER)",
+    )
     args = parser.parse_args()
+    global SMOKE_TICKER
+    SMOKE_TICKER = args.ticker
 
     default_model, _ = PROVIDER_DEFAULTS[args.provider]
     deep_model = args.deep_model or default_model

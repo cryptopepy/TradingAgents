@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 from .crypto_common import env_api_key, http_get_json, no_data_message
+from .date_window import lookback_start
 from .symbol_utils import parse_crypto_pair
 
 logger = logging.getLogger(__name__)
@@ -54,4 +55,5 @@ def fetch_lunarcrush_sentiment(
     ]
     if trade_date:
         lines.insert(1, f"Analysis date: {trade_date}")
+        lines.insert(2, f"Lookback window: {lookback_start(trade_date, 7)} to {trade_date} (live API snapshot)")
     return "\n".join(lines)

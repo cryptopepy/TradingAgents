@@ -9,6 +9,7 @@ from typing import Annotated
 import pandas as pd
 
 from .crypto_common import env_api_key, http_get_json, no_data_message
+from .date_window import article_date_in_range
 from .symbol_utils import NoMarketDataError, parse_crypto_pair
 
 logger = logging.getLogger(__name__)
@@ -88,14 +89,12 @@ def get_cryptocompare_news(
         return no_data_message(symbol, f"CryptoCompare news: {exc}")
 
     articles = data.get("Data") or []
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
     lines = [f"# Crypto news for {fsym} ({start_date} to {end_date})", ""]
     count = 0
     for art in articles:
         published = datetime.utcfromtimestamp(art.get("published_on", 0))
-        if published < start_dt or published > end_dt:
+        if not article_date_in_range(published, start_date, end_date):
             continue
         lines.append(f"## {art.get('title', 'Untitled')}")
         lines.append(f"Source: {art.get('source', 'N/A')} | {published.strftime('%Y-%m-%d')}")

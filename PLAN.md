@@ -56,6 +56,19 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 
 ### Task-4: Backtest Engine Integration
 - **Status:** Completed
+
+#### Task-4.1: UI Pipeline Backtest Trigger
+- **Status:** Completed
+- Post-analysis questionary menu after Portfolio Manager (no automatic backtest)
+- Options: auto multi-horizon backtest, custom parameters, main menu, exit
+- `rich.progress` during 10-strategy optimization; results `rich.table` with WINNER
+- `--no-backtest` hides backtest menu options; user consent required for optimization
+
+#### Task-4.2: Paper Trading Simulator Scaffolding
+- **Status:** Completed
+- `tradingagents/simulator/core.py` — `AssetPosition`, `VirtualPortfolio` reuse, `evaluate_live_market_tick`
+- LIVE_MODE → ccxt; else `DummyPriceFeed` polling hook
+- CLI deploy prompt wires winning strategy params into paper simulator scaffold
 - [x] `Historic-Crypto` dependency + `uv lock`
 - [x] `tradingagents/backtest/engine.py` — Historic_Crypto fetch, CSV cache, 8h/24h/7d horizons
 - [x] `tradingagents/backtest/strategies.py` — EMA, RSI, MACD, Bollinger (no LLM)

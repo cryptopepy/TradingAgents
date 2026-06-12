@@ -32,6 +32,7 @@ from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
+from cli.post_analysis import show_post_analysis_menu
 
 console = Console()
 
@@ -1024,11 +1025,21 @@ def run_backtest_for_ticker(
     return summary
 
 
-def run_analysis(checkpoint: bool = False, run_backtest: bool = True):
-    # First get all user selections
-    selections = get_user_selections()
+def run_analysis(checkpoint: bool = False, no_backtest: bool = False):
+    while True:
+        selections = get_user_selections()
+        _run_single_analysis(selections, checkpoint=checkpoint)
+        action = show_post_analysis_menu(
+            selections["ticker"],
+            selections["analysis_date"],
+            _analysis_config_from_selections(selections, checkpoint),
+            no_backtest=no_backtest,
+        )
+        if action != "main_menu":
+            break
 
-    # Create config with selected research depth
+
+def _analysis_config_from_selections(selections: dict, checkpoint: bool) -> dict:
     config = DEFAULT_CONFIG.copy()
     config["max_debate_rounds"] = selections["research_depth"]
     config["max_risk_discuss_rounds"] = selections["research_depth"]
@@ -1036,12 +1047,17 @@ def run_analysis(checkpoint: bool = False, run_backtest: bool = True):
     config["deep_think_llm"] = selections["deep_thinker"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
-    # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
     config["anthropic_effort"] = selections.get("anthropic_effort")
     config["output_language"] = selections.get("output_language", "English")
     config["checkpoint_enabled"] = checkpoint
+    return config
+
+
+def _run_single_analysis(selections: dict, *, checkpoint: bool):
+    # Build config from selections
+    config = _analysis_config_from_selections(selections, checkpoint)
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
@@ -1261,17 +1277,6 @@ def run_analysis(checkpoint: bool = False, run_backtest: bool = True):
         )
         message_buffer.add_message("System", analyst_wall_time_tracker.format_summary())
 
-        if run_backtest:
-            message_buffer.add_message("System", "Running backtest optimization...")
-            update_display(layout, stats_handler=stats_handler, start_time=start_time)
-            run_backtest_for_ticker(
-                selections["ticker"],
-                selections["analysis_date"],
-                config,
-                message_buffer_ref=message_buffer,
-            )
-            update_display(layout, stats_handler=stats_handler, start_time=start_time)
-
         # Update final report sections
         for section in message_buffer.report_sections.keys():
             if section in final_state:
@@ -1282,15 +1287,6 @@ def run_analysis(checkpoint: bool = False, run_backtest: bool = True):
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
-    if run_backtest and message_buffer.report_sections.get("backtest_report"):
-        console.print()
-        console.print(Panel(
-            Markdown(message_buffer.report_sections["backtest_report"]),
-            title="Backtest Optimization",
-            border_style="cyan",
-            padding=(1, 2),
-        ))
-
     # Prompt to save report
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
@@ -1329,14 +1325,14 @@ def analyze(
     no_backtest: bool = typer.Option(
         False,
         "--no-backtest",
-        help="Skip post-analysis strategy backtest optimization.",
+        help="Hide post-analysis backtest menu options (no automatic backtest).",
     ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint, run_backtest=not no_backtest)
+    run_analysis(checkpoint=checkpoint, no_backtest=no_backtest)
 
 
 @app.command("backtest")

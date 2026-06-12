@@ -29,6 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .date_window import lookback_start, timestamp_in_trade_window
 from .sentiment_pit import NO_HISTORICAL_SENTIMENT_DATA, is_historical_trade_date
 
 logger = logging.getLogger(__name__)
@@ -159,12 +160,19 @@ def fetch_reddit_posts(
     if trade_date and is_historical_trade_date(trade_date):
         return NO_HISTORICAL_SENTIMENT_DATA
 
+    window_start = lookback_start(trade_date, 7) if trade_date else None
     blocks = []
     total_posts = 0
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
         posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        if trade_date:
+            posts = [
+                p
+                for p in posts
+                if timestamp_in_trade_window(p.get("created_utc") or 0, trade_date, lookback_days=7)
+            ]
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -196,9 +204,13 @@ def fetch_reddit_posts(
             )
         blocks.append("\n".join(lines))
 
+    window_label = (
+        f"{window_start} to {trade_date}" if trade_date and window_start else "the past 7 days"
+    )
     if total_posts == 0:
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
-            f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
+            f"{', '.join(f'r/{s}' for s in subreddits)} in {window_label}>"
         )
-    return "\n\n".join(blocks)
+    header = f"# Reddit posts for {ticker.upper()} ({window_label})\n\n"
+    return header + "\n\n".join(blocks)

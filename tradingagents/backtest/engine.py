@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -488,12 +488,16 @@ def optimize_strategies(
     *,
     stop_loss_pct: float = 0.02,
     transaction_cost_pct: float = 0.001,
+    lookbacks: Optional[Sequence[LookbackWindow]] = None,
+    on_metric: Optional[Callable[[StrategyMetrics], None]] = None,
 ) -> OptimizationResult:
     """Run all strategies across 8h, 24h, and 7d horizons; pick the winner."""
     strategies = list(strategies or DEFAULT_STRATEGIES)
+    windows = list(lookbacks or LookbackWindow)
     all_metrics: List[StrategyMetrics] = []
+    metric_callback: Optional[Callable[[StrategyMetrics], None]] = on_metric
 
-    for lookback in LookbackWindow:
+    for lookback in windows:
         try:
             df = fetch_historical_crypto(symbol, end_date, lookback)
         except Exception as exc:
@@ -508,7 +512,10 @@ def optimize_strategies(
                 stop_loss_pct=stop_loss_pct,
                 transaction_cost_pct=transaction_cost_pct,
             )
-            all_metrics.append(_metrics_from_result(strategy, lookback, result))
+            metric = _metrics_from_result(strategy, lookback, result)
+            all_metrics.append(metric)
+            if metric_callback is not None:
+                metric_callback(metric)
 
     winner_summary: Optional[WinningStrategySummary] = None
     if all_metrics:
