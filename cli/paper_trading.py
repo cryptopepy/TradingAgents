@@ -12,7 +12,11 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
-from tradingagents.backtest import deploy_winning_strategy, optimize_strategies
+from tradingagents.backtest import (
+    deploy_winning_strategy,
+    optimize_strategies,
+    require_optimization_results,
+)
 from tradingagents.simulator import PaperTradingEngine, PaperTradingState, session_from_optimization
 
 console = Console()
@@ -57,12 +61,12 @@ def run_paper_session(
             strategy_name=strategy_name,
             lookback=lookback,
             signal=StrategySignal.FLAT,
-            initial_equity=float(cfg.get("paper_initial_equity", 10_000.0)),
+            initial_equity=float(cfg.get("paper_initial_equity", 100_000.0)),
         )
     else:
         console.print(f"[cyan]Running backtest to select strategy for {ticker}…[/cyan]")
         end_date = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-        optimization = optimize_strategies(ticker, end_date)
+        optimization = require_optimization_results(optimize_strategies(ticker, end_date))
         optimization = deploy_winning_strategy(optimization, cfg)
         if optimization.winner is None:
             console.print("[red]No winning strategy found — cannot start paper trading.[/red]")
@@ -101,7 +105,10 @@ def run_paper_session(
         latest_state = state
 
     def _on_switch(old: str, new: str) -> None:
-        console.print(f"[yellow]Adaptive switch:[/yellow] {old} → {new}")
+        console.print(
+            f"[yellow][AUTONOMOUS ROTATION]:[/yellow] Strategy changed from [{old}] to [{new}] "
+            "due to threshold violation."
+        )
 
     engine.on_state_change = _on_state
     engine.on_strategy_switch = _on_switch
@@ -140,4 +147,18 @@ def prompt_paper_options(config: dict) -> dict:
         default="",
     ).ask() or ""
     ticks = int(ticks_str) if ticks_str.strip().isdigit() else None
+    window = questionary.text(
+        "Drawdown review window (minutes):",
+        default=str(config.get("drawdown_time_window_minutes", config.get("paper_loss_review_minutes", 60))),
+    ).ask()
+    threshold = questionary.text(
+        "Max allowed drawdown % (e.g. 5.0):",
+        default=str(config.get("max_allowed_drawdown_pct", config.get("paper_loss_threshold_pct", 5.0))),
+    ).ask()
+    if window:
+        config["drawdown_time_window_minutes"] = float(window)
+        config["paper_loss_review_minutes"] = float(window)
+    if threshold:
+        config["max_allowed_drawdown_pct"] = float(threshold)
+        config["paper_loss_threshold_pct"] = float(threshold)
     return {"adaptive": adaptive, "ticks": ticks}
