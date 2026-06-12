@@ -41,6 +41,8 @@ class TestPaperInteractive:
         assert params.ticker == "BTC/USDT"
         assert params.initial_equity == 10_000.0
         assert params.strategy_name is None
+        assert params.stop_loss_pct == 0.02
+        assert params.take_profit_pct is None
         assert params.adaptive_enabled is True
 
     def test_resolve_paper_params_non_interactive_explicit_flags(self):
@@ -85,6 +87,8 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "ETH/USDC"),
             MagicMock(ask=lambda: "10000"),
             MagicMock(ask=lambda: "10"),
+            MagicMock(ask=lambda: "0.03"),
+            MagicMock(ask=lambda: "0.06"),
             MagicMock(ask=lambda: "30"),
             MagicMock(ask=lambda: "5.0"),
         ]
@@ -106,6 +110,8 @@ class TestPaperInteractive:
         assert params.strategy_name is None
         assert params.initial_equity == 10_000.0
         assert params.ticks == 10
+        assert params.stop_loss_pct == 0.03
+        assert params.take_profit_pct == 0.06
         assert params.live_mode is True
         assert params.adaptive_enabled is True
         assert params.drawdown_window_minutes == 30.0

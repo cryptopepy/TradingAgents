@@ -33,6 +33,8 @@ class PaperRunParams:
     initial_equity: float
     ticks: Optional[int]
     live_mode: bool
+    stop_loss_pct: float
+    take_profit_pct: Optional[float]
     adaptive_enabled: bool
     drawdown_window_minutes: float
     max_drawdown_pct: float
@@ -58,6 +60,17 @@ def _default_drawdown_pct(config: dict) -> float:
             config.get("paper_loss_threshold_pct", 5.0),
         )
     )
+
+
+def _default_stop_loss_pct(config: dict) -> float:
+    return float(config.get("paper_stop_loss_pct", 0.02))
+
+
+def _default_take_profit_pct(config: dict) -> Optional[float]:
+    raw = config.get("paper_take_profit_pct")
+    if raw is None:
+        return None
+    return float(raw)
 
 
 def validate_strategy_name(name: Optional[str]) -> Optional[str]:
@@ -151,6 +164,51 @@ def _prompt_ticks() -> Optional[int]:
     return validate_ticks(int(text))
 
 
+def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
+    stop_default = _default_stop_loss_pct(config)
+    take_default = _default_take_profit_pct(config)
+    take_default_str = "" if take_default is None else str(take_default)
+
+    stop_raw = questionary.text(
+        f"Stop-loss % (default {stop_default}, e.g. 0.02 = 2%):",
+        default=str(stop_default),
+    ).ask()
+    if stop_raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+
+    take_label = (
+        f"Take-profit % (default {take_default_str or '2× stop-loss'}; empty = 2× stop-loss):"
+        if take_default is not None
+        else "Take-profit % (empty = 2× stop-loss):"
+    )
+    take_raw = questionary.text(
+        take_label,
+        default=take_default_str,
+    ).ask()
+    if take_raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+
+    try:
+        stop_loss_pct = float(stop_raw)
+    except ValueError as exc:
+        raise BacktestValidationError(
+            f"Stop-loss must be a number, got {stop_raw!r}"
+        ) from exc
+    validate_positive_float(stop_loss_pct, name="Stop-loss", minimum=0.0001)
+
+    take_profit_pct: Optional[float] = None
+    if take_raw.strip():
+        try:
+            take_profit_pct = float(take_raw)
+        except ValueError as exc:
+            raise BacktestValidationError(
+                f"Take-profit must be a number, got {take_raw!r}"
+            ) from exc
+        validate_positive_float(take_profit_pct, name="Take-profit", minimum=0.0001)
+
+    return stop_loss_pct, take_profit_pct
+
+
 def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     adaptive = questionary.confirm(
         "Enable adaptive strategy re-optimization on sustained drawdown?",
@@ -225,6 +283,7 @@ def prompt_paper_params(
         else _prompt_equity(float(cfg.get("paper_initial_equity", DEFAULT_EQUITY)))
     )
     resolved_ticks = validate_ticks(ticks) if ticks is not None else _prompt_ticks()
+    stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(cfg)
 
     if live_mode:
         resolved_live = True
@@ -246,6 +305,8 @@ def prompt_paper_params(
         initial_equity=resolved_equity,
         ticks=resolved_ticks,
         live_mode=resolved_live,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
         adaptive_enabled=adaptive,
         drawdown_window_minutes=window,
         max_drawdown_pct=threshold,
@@ -320,6 +381,8 @@ def resolve_paper_params(
         initial_equity=resolved_equity,
         ticks=validate_ticks(ticks),
         live_mode=live_mode,
+        stop_loss_pct=_default_stop_loss_pct(cfg),
+        take_profit_pct=_default_take_profit_pct(cfg),
         adaptive_enabled=resolved_adaptive,
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
@@ -335,6 +398,8 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_loss_review_minutes"] = params.drawdown_window_minutes
     cfg["max_allowed_drawdown_pct"] = params.max_drawdown_pct
     cfg["paper_loss_threshold_pct"] = params.max_drawdown_pct
+    cfg["paper_stop_loss_pct"] = params.stop_loss_pct
+    cfg["paper_take_profit_pct"] = params.take_profit_pct
     if params.live_mode:
         cfg["live_mode"] = True
     return cfg

@@ -32,6 +32,18 @@ from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 
 logger = logging.getLogger(__name__)
 
+_SLEEP_POLL_SECONDS = 0.25
+
+
+def _sleep_until_stopped(stop_event: threading.Event, seconds: float) -> None:
+    """Sleep in short slices so ``stop_event`` can interrupt promptly."""
+    deadline = time.monotonic() + seconds
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_SLEEP_POLL_SECONDS, remaining))
+
 
 class StrategySignal(str, Enum):
     LONG = "long"
@@ -289,24 +301,28 @@ def run_polling_loop(
         dummy_feed = DummyPriceFeed(anchor_price=anchor, symbol=session.symbol)
 
     ticks = 0
-    while stop_event is None or not stop_event.is_set():
-        price = _fetch_tick_price(session.symbol, cfg, dummy_feed)
-        result = evaluate_live_market_tick(
-            portfolio,
-            price,
-            session.signal,
-            asset=session.symbol,
-            matcher=matcher,
-            stop_loss_pct=session.stop_loss_pct,
-            take_profit_pct=session.take_profit_pct,
-            slippage_bps=session.slippage_bps,
-        )
-        if on_tick:
-            on_tick(result)
-        ticks += 1
-        if max_ticks is not None and ticks >= max_ticks:
-            break
-        time.sleep(interval_seconds)
+    event = stop_event or threading.Event()
+    try:
+        while not event.is_set():
+            price = _fetch_tick_price(session.symbol, cfg, dummy_feed)
+            result = evaluate_live_market_tick(
+                portfolio,
+                price,
+                session.signal,
+                asset=session.symbol,
+                matcher=matcher,
+                stop_loss_pct=session.stop_loss_pct,
+                take_profit_pct=session.take_profit_pct,
+                slippage_bps=session.slippage_bps,
+            )
+            if on_tick:
+                on_tick(result)
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                break
+            _sleep_until_stopped(event, interval_seconds)
+    except KeyboardInterrupt:
+        event.set()
 
 
 def start_paper_trading_scaffold(

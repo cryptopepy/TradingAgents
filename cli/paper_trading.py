@@ -81,13 +81,12 @@ def run_paper_session(
     engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
     stop_requested = False
+    previous_sigint = signal.getsignal(signal.SIGINT)
 
     def _handle_sigint(_signum, _frame) -> None:
         nonlocal stop_requested
         stop_requested = True
         engine.stop()
-
-    signal.signal(signal.SIGINT, _handle_sigint)
 
     console.print(
         Panel(
@@ -115,26 +114,32 @@ def run_paper_session(
     engine.on_state_change = _on_state
     engine.on_strategy_switch = _on_switch
 
-    with Live(console=console, refresh_per_second=4, transient=False) as live:
-        def _on_tick(_result) -> None:
-            nonlocal tick_count
-            tick_count += 1
-            if latest_state is not None:
-                live.update(render_paper_state_table(latest_state))
+    signal.signal(signal.SIGINT, _handle_sigint)
+    try:
+        with Live(console=console, refresh_per_second=4, transient=False) as live:
+            def _on_tick(_result) -> None:
+                nonlocal tick_count
+                tick_count += 1
+                if latest_state is not None:
+                    live.update(render_paper_state_table(latest_state))
 
-        try:
-            engine.run_loop(
-                interval_seconds=interval,
-                max_ticks=ticks,
-                on_tick=_on_tick,
-            )
-        except KeyboardInterrupt:
-            stop_requested = True
-            engine.stop()
+            try:
+                engine.run_loop(
+                    interval_seconds=interval,
+                    max_ticks=ticks,
+                    on_tick=_on_tick,
+                )
+            except KeyboardInterrupt:
+                stop_requested = True
+                engine.stop()
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
 
     if latest_state is not None:
         console.print()
         console.print(render_paper_state_table(latest_state))
+    if stop_requested:
+        console.print("[yellow]Paper trading stopped (Ctrl+C). State saved.[/yellow]")
     console.print(f"[dim]Paper session ended after {tick_count} tick(s).[/dim]")
 
 

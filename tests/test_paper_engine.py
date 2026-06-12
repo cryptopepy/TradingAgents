@@ -1,5 +1,7 @@
 """Paper trading engine."""
 
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,3 +73,36 @@ class TestPaperTradingEngine:
         )
         assert session.strategy_name == "rsi_mean_reversion"
         switch_cb.assert_called_once_with("ema_crossover", "rsi_mean_reversion")
+
+    @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
+    @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
+    def test_run_loop_stops_promptly_during_sleep(self, mock_price, _signal):
+        mock_price.return_value = LivePrice(
+            symbol="BTC/USDT",
+            price=50_000.0,
+            source=PriceSource.CRYPTOCOMPARE,
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        )
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        engine = PaperTradingEngine(session, adaptive_enabled=False)
+        tick_count = 0
+
+        def _tick_and_schedule_stop():
+            nonlocal tick_count
+            tick_count += 1
+            if tick_count == 1:
+                threading.Timer(0.1, engine.stop).start()
+            return MagicMock()
+
+        with patch.object(engine, "tick", side_effect=_tick_and_schedule_stop):
+            start = time.monotonic()
+            engine.run_loop(interval_seconds=5.0)
+            elapsed = time.monotonic() - start
+
+        assert tick_count == 1
+        assert elapsed < 2.0

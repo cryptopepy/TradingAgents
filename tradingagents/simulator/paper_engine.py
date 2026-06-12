@@ -25,6 +25,7 @@ from tradingagents.simulator.core import (
     PaperTradingSession,
     StrategySignal,
     TickEvaluationResult,
+    _sleep_until_stopped,
     evaluate_live_market_tick,
 )
 from tradingagents.simulator.persistence import (
@@ -283,14 +284,17 @@ class PaperTradingEngine:
         """Blocking poll loop until ``max_ticks`` or stop requested."""
         interval = interval_seconds or float(self.config.get("paper_tick_interval_seconds", 10.0))
         ticks = 0
-        while not self._stop_event.is_set():
-            result = self.tick()
-            if on_tick:
-                on_tick(result)
-            ticks += 1
-            if max_ticks is not None and ticks >= max_ticks:
-                break
-            time.sleep(interval)
+        try:
+            while not self._stop_event.is_set():
+                result = self.tick()
+                if on_tick:
+                    on_tick(result)
+                ticks += 1
+                if max_ticks is not None and ticks >= max_ticks:
+                    break
+                _sleep_until_stopped(self._stop_event, interval)
+        except KeyboardInterrupt:
+            self._stop_event.set()
 
     def start_background(
         self,
