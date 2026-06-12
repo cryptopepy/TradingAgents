@@ -175,9 +175,7 @@ class LiveFeedRouter:
 
     def fetch_metadata(self, symbol: str) -> MarketMetadata:
         """CoinGecko metadata: name, circulating supply, asset and global market cap."""
-        from tradingagents.dataflows.coingecko import resolve_coin_id
-        from tradingagents.dataflows.coingecko import _api_base, _headers
-        from tradingagents.dataflows.crypto_common import http_get_json
+        from tradingagents.dataflows.coingecko import CoinGeckoAPIError, _coingecko_get, resolve_coin_id
 
         pair = parse_crypto_pair(symbol)
         meta = MarketMetadata(symbol=pair.display)
@@ -187,8 +185,8 @@ class LiveFeedRouter:
 
         meta.coin_id = coin_id
         try:
-            data = http_get_json(
-                f"{_api_base()}/coins/{coin_id}",
+            data = _coingecko_get(
+                f"/coins/{coin_id}",
                 params={
                     "localization": "false",
                     "tickers": "false",
@@ -196,22 +194,23 @@ class LiveFeedRouter:
                     "community_data": "false",
                     "developer_data": "false",
                 },
-                headers=_headers(),
             )
-            md = data.get("market_data") or {}
-            meta.name = data.get("name")
-            cs = md.get("circulating_supply")
-            meta.circulating_supply = float(cs) if cs is not None else None
-            mc = md.get("market_cap", {}).get("usd")
-            meta.market_cap_usd = float(mc) if mc is not None else None
-        except Exception as exc:
+            if isinstance(data, dict):
+                md = data.get("market_data") or {}
+                meta.name = data.get("name")
+                cs = md.get("circulating_supply")
+                meta.circulating_supply = float(cs) if cs is not None else None
+                mc = md.get("market_cap", {}).get("usd")
+                meta.market_cap_usd = float(mc) if mc is not None else None
+        except CoinGeckoAPIError as exc:
             logger.debug("CoinGecko metadata failed for %s: %s", symbol, exc)
 
         try:
-            global_data = http_get_json(f"{_api_base()}/global", headers=_headers())
-            total = (global_data.get("data") or {}).get("total_market_cap", {}).get("usd")
-            meta.global_market_cap_usd = float(total) if total is not None else None
-        except Exception as exc:
+            global_data = _coingecko_get("/global")
+            if isinstance(global_data, dict):
+                total = (global_data.get("data") or {}).get("total_market_cap", {}).get("usd")
+                meta.global_market_cap_usd = float(total) if total is not None else None
+        except CoinGeckoAPIError as exc:
             logger.debug("CoinGecko global market cap failed: %s", exc)
 
         return meta

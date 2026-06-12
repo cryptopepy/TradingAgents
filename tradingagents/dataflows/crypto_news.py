@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, Optional
 
 from .config import get_config
-from .coingecko import resolve_coin_id
+from .coingecko import CoinGeckoAPIError, fetch_coin_news, resolve_coin_id
 from .crypto_common import http_get_json, no_data_message
 from .date_window import article_date_in_range, lookback_start
 from .cryptocompare import get_cryptocompare_news
@@ -30,28 +30,28 @@ def get_crypto_news(
         pair = parse_crypto_pair(symbol)
         coin_id = resolve_coin_id(pair.base)
         if coin_id:
-            data = http_get_json(
-                "https://api.coingecko.com/api/v3/coins/" + coin_id + "/status_updates",
-                params={"per_page": 20},
-            )
-            updates = data.get("status_updates") or []
-            lines = [f"# CoinGecko status updates for {pair.display} ({start_date} to {end_date})", ""]
-            for upd in updates:
-                created = upd.get("created_at")
-                if created:
+            articles = fetch_coin_news(coin_id, per_page=20)
+            lines = [f"# CoinGecko news for {pair.display} ({start_date} to {end_date})", ""]
+            for art in articles:
+                posted = art.get("posted_at")
+                if posted:
                     try:
-                        published = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        published = datetime.fromisoformat(posted.replace("Z", "+00:00"))
                         if not article_date_in_range(published, start_date, end_date):
                             continue
                     except ValueError:
                         pass
-                lines.append(f"- {upd.get('description', '')[:300]}")
+                title = art.get("title") or "Untitled"
+                source = art.get("source_name") or "CoinGecko"
+                lines.append(f"- [{title}]({art.get('url', '')}) — {source}")
                 if len(lines) > 16:
                     break
             if len(lines) > 2:
                 return "\n".join(lines)
+    except CoinGeckoAPIError as exc:
+        logger.debug("CoinGecko news fallback unavailable: %s", exc)
     except Exception as exc:
-        logger.debug("CoinGecko status updates failed: %s", exc)
+        logger.debug("CoinGecko news fallback failed: %s", exc)
 
     return result
 

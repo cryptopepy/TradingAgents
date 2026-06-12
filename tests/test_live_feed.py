@@ -23,7 +23,7 @@ class TestLiveFeedRouter:
         assert quote.source == PriceSource.PLACEHOLDER
         assert quote.price > 0
 
-    @patch("tradingagents.dataflows.crypto_common.http_get_json")
+    @patch("tradingagents.dataflows.coingecko._coingecko_get")
     @patch("tradingagents.dataflows.coingecko.resolve_coin_id", return_value="bitcoin")
     def test_fetch_metadata_includes_supply_and_global_cap(self, _resolve, mock_http):
         mock_http.side_effect = [
