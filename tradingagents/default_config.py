@@ -19,6 +19,12 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LIVE_MODE":            "live_mode",
+    "TRADINGAGENTS_PAPER_TRADE_ENABLED":  "paper_trade_enabled",
+    "TRADINGAGENTS_PAPER_LOSS_REVIEW_MINUTES": "paper_loss_review_minutes",
+    "TRADINGAGENTS_PAPER_LOSS_THRESHOLD_PCT": "paper_loss_threshold_pct",
+    "TRADINGAGENTS_PAPER_TICK_INTERVAL_SECONDS": "paper_tick_interval_seconds",
+    "TRADINGAGENTS_PAPER_INITIAL_EQUITY": "paper_initial_equity",
+    "TRADINGAGENTS_PAPER_ADAPTIVE_ENABLED": "paper_adaptive_enabled",
 }
 
 
@@ -77,6 +83,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Live execution: when True (or LIVE_MODE=1), backtest bridge uses ccxt
     # for real-time prices; otherwise dummy_feed mutates from last historical bar.
     "live_mode": False,
+    # Paper trading simulation (no real orders)
+    "paper_trade_enabled": False,
+    "paper_loss_review_minutes": 60,
+    "paper_loss_threshold_pct": 5.0,
+    "paper_tick_interval_seconds": 10.0,
+    "paper_initial_equity": 10_000.0,
+    "paper_adaptive_enabled": True,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
