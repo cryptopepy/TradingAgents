@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -22,8 +23,10 @@ from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.symbol_utils import parse_crypto_pair
 
+from .matcher import SimulatedMatcher
+from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_to_intents
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
-from .strategies import DEFAULT_STRATEGIES, Strategy
+from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -222,15 +225,71 @@ def _compute_sharpe(returns: pd.Series, periods_per_year: float) -> float:
     return float(returns.mean() / returns.std() * np.sqrt(periods_per_year))
 
 
+def _submit_exit(
+    matcher: SimulatedMatcher,
+    asset: str,
+    ts: datetime,
+    price: float,
+) -> None:
+    matcher.submit_intent(
+        TransactionIntent(timestamp=ts, asset=asset, direction=Direction.EXIT),
+        reference_price=price,
+    )
+
+
+def _index_intents_by_bar(
+    df: pd.DataFrame,
+    intents: List[TransactionIntent],
+) -> Dict[int, List[TransactionIntent]]:
+    """Map each intent to the nearest OHLCV bar index."""
+    indexed: Dict[int, List[TransactionIntent]] = defaultdict(list)
+    dates = pd.to_datetime(df["Date"])
+    for intent in intents:
+        idx = int((dates - pd.Timestamp(intent.timestamp)).abs().argmin())
+        indexed[idx].append(intent)
+    return indexed
+
+
+def _record_exit_trade(
+    trades: List[TradeRecord],
+    dates: List[str],
+    entry_idx: int,
+    exit_idx: int,
+    position: int,
+    entry_price: float,
+    exit_price: float,
+    transaction_cost_pct: float,
+    exit_reason: str,
+) -> None:
+    move = (exit_price - entry_price) / entry_price
+    if position < 0:
+        move = -move
+    if exit_reason == "stop_loss":
+        net = move - 2 * transaction_cost_pct
+    else:
+        net = move - 2 * transaction_cost_pct
+    trades.append(
+        TradeRecord(
+            entry_date=dates[entry_idx],
+            exit_date=dates[exit_idx],
+            side="long" if position > 0 else "short",
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl_pct=net * 100,
+            exit_reason=exit_reason,
+        )
+    )
+
+
 def run_strategy_on_frame(
     df: pd.DataFrame,
     strategy: Strategy,
     *,
+    symbol: str = "ASSET",
     stop_loss_pct: float = 0.02,
     transaction_cost_pct: float = 0.001,
 ) -> BacktestResult:
-    """Simulate a strategy on a prepared OHLCV frame."""
-    symbol = ""
+    """Simulate a strategy on a prepared OHLCV frame via VirtualPortfolio."""
     end_date = ""
     lookback = LookbackWindow.D7
     notes: List[str] = []
@@ -248,110 +307,102 @@ def run_strategy_on_frame(
 
     close = df["Close"].astype(float)
     signals = strategy.generate_signals(df)
+    intents = signals_to_intents(df, symbol, signals)
+    intent_by_bar = _index_intents_by_bar(df, intents)
     dates = df["Date"].dt.strftime("%Y-%m-%d %H:%M").tolist()
+
+    matcher = SimulatedMatcher(
+        slippage_bps=transaction_cost_pct * 10_000,
+        portfolio=VirtualPortfolio(initial_equity=1.0),
+    )
 
     position = 0
     entry_price = 0.0
     entry_idx = 0
     trades: List[TradeRecord] = []
-    equity = 1.0
-    equity_points: List[float] = [equity]
+    equity_points: List[float] = [matcher.portfolio.equity]
     bar_returns: List[float] = []
 
     for i in range(1, len(df)):
         price = float(close.iloc[i])
-        target = int(signals.iloc[i]) if pd.notna(signals.iloc[i]) else 0
-        prev_equity = equity
+        ts = pd.Timestamp(df["Date"].iloc[i]).to_pydatetime()
+        prev_equity = matcher.portfolio.equity
+        bar_intents = intent_by_bar.get(i, [])
 
         if position != 0:
             move = (price - entry_price) / entry_price
             if position < 0:
                 move = -move
             if move <= -stop_loss_pct:
-                net = move - 2 * transaction_cost_pct
-                equity *= 1 + net
-                trades.append(
-                    TradeRecord(
-                        entry_date=dates[entry_idx],
-                        exit_date=dates[i],
-                        side="long" if position > 0 else "short",
-                        entry_price=entry_price,
-                        exit_price=price,
-                        pnl_pct=net * 100,
-                        exit_reason="stop_loss",
-                    )
+                _submit_exit(matcher, symbol, ts, price)
+                _record_exit_trade(
+                    trades,
+                    dates,
+                    entry_idx,
+                    i,
+                    position,
+                    entry_price,
+                    price,
+                    transaction_cost_pct,
+                    "stop_loss",
                 )
                 position = 0
-                bar_returns.append((equity - prev_equity) / prev_equity if prev_equity else 0.0)
-                equity_points.append(equity)
+                matcher.mark_to_market({symbol: price})
+                bar_returns.append(
+                    (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
+                )
+                equity_points.append(matcher.portfolio.equity)
                 continue
 
-        if position == 0 and target != 0:
-            position = target
-            entry_price = price
-            entry_idx = i
-            equity *= 1 - transaction_cost_pct
-        elif position != 0 and target != 0 and target != position:
-            move = (price - entry_price) / entry_price
-            if position < 0:
-                move = -move
-            move -= 2 * transaction_cost_pct
-            equity *= 1 + move
-            trades.append(
-                TradeRecord(
-                    entry_date=dates[entry_idx],
-                    exit_date=dates[i],
-                    side="long" if position > 0 else "short",
-                    entry_price=entry_price,
-                    exit_price=price,
-                    pnl_pct=move * 100,
-                    exit_reason="signal_flip",
+        for j, intent in enumerate(bar_intents):
+            if intent.direction == Direction.EXIT and position != 0:
+                remaining = [x.direction for x in bar_intents[j + 1 :]]
+                flip = any(d in (Direction.LONG, Direction.SHORT) for d in remaining)
+                _record_exit_trade(
+                    trades,
+                    dates,
+                    entry_idx,
+                    i,
+                    position,
+                    entry_price,
+                    price,
+                    transaction_cost_pct,
+                    "signal_flip" if flip else "signal_exit",
                 )
-            )
-            position = target
-            entry_price = price
-            entry_idx = i
-            equity *= 1 - transaction_cost_pct
-        elif position != 0 and target == 0:
-            move = (price - entry_price) / entry_price
-            if position < 0:
-                move = -move
-            move -= 2 * transaction_cost_pct
-            equity *= 1 + move
-            trades.append(
-                TradeRecord(
-                    entry_date=dates[entry_idx],
-                    exit_date=dates[i],
-                    side="long" if position > 0 else "short",
-                    entry_price=entry_price,
-                    exit_price=price,
-                    pnl_pct=move * 100,
-                    exit_reason="signal_exit",
-                )
-            )
-            position = 0
+                position = 0
+            elif intent.direction == Direction.LONG:
+                position = 1
+                entry_price = price
+                entry_idx = i
+            elif intent.direction == Direction.SHORT:
+                position = -1
+                entry_price = price
+                entry_idx = i
+            matcher.submit_intent(intent, reference_price=price)
 
-        bar_returns.append((equity - prev_equity) / prev_equity if prev_equity else 0.0)
-        equity_points.append(equity)
+        matcher.mark_to_market({symbol: price})
+        bar_returns.append(
+            (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
+        )
+        equity_points.append(matcher.portfolio.equity)
 
     if position != 0:
         price = float(close.iloc[-1])
-        move = (price - entry_price) / entry_price
-        if position < 0:
-            move = -move
-        move -= 2 * transaction_cost_pct
-        equity *= 1 + move
-        trades.append(
-            TradeRecord(
-                entry_date=dates[entry_idx],
-                exit_date=dates[-1],
-                side="long" if position > 0 else "short",
-                entry_price=entry_price,
-                exit_price=price,
-                pnl_pct=move * 100,
-                exit_reason="end_of_window",
-            )
+        ts = pd.Timestamp(df["Date"].iloc[-1]).to_pydatetime()
+        _submit_exit(matcher, symbol, ts, price)
+        _record_exit_trade(
+            trades,
+            dates,
+            entry_idx,
+            len(df) - 1,
+            position,
+            entry_price,
+            price,
+            transaction_cost_pct,
+            "end_of_window",
         )
+
+    equity = matcher.portfolio.equity
 
     gross_profit = sum(t.pnl_pct for t in trades if t.pnl_pct > 0)
     gross_loss = abs(sum(t.pnl_pct for t in trades if t.pnl_pct < 0))
@@ -528,27 +579,14 @@ def deploy_winning_strategy(
     df = fetch_historical_crypto(optimization.symbol, optimization.end_date, lookback)
 
     paper_signal = "flat"
-    if not df.empty:
-        from .strategies import (
-            BollingerMeanReversionStrategy,
-            EmaCrossoverStrategy,
-            MacdCrossoverStrategy,
-            RsiMeanReversionStrategy,
+    if not df.empty and optimization.winner.strategy_name in STRATEGY_REGISTRY:
+        strategy = build_strategy(
+            optimization.winner.strategy_name,
+            optimization.winner.parameters,
         )
-
-        strategy_map = {
-            "ema_crossover": EmaCrossoverStrategy,
-            "rsi_mean_reversion": RsiMeanReversionStrategy,
-            "macd_crossover": MacdCrossoverStrategy,
-            "bollinger_mean_reversion": BollingerMeanReversionStrategy,
-        }
-        cls = strategy_map.get(optimization.winner.strategy_name)
-        if cls:
-            params = optimization.winner.parameters
-            strategy = cls(**{k: v for k, v in params.items() if k in cls.__dataclass_fields__})
-            signals = strategy.generate_signals(df)
-            last = int(signals.iloc[-1]) if len(signals) else 0
-            paper_signal = {1: "long", -1: "short", 0: "flat"}.get(last, "flat")
+        signals = strategy.generate_signals(df)
+        last = int(signals.iloc[-1]) if len(signals) else 0
+        paper_signal = {1: "long", -1: "short", 0: "flat"}.get(last, "flat")
 
     return optimization.model_copy(
         update={"live_price": price, "paper_signal": paper_signal}

@@ -64,6 +64,15 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - [x] Live bridge — `LIVE_MODE` / `live_mode`, ccxt Binance ticker, `dummy_feed.py` fallback
 - [x] `tests/test_backtester.py` — synthetic series, strategy scoring
 
+#### Advanced Alpha Strategies (E–J) & Paper Trading Architecture
+- **Status:** Completed
+- [x] Strategies E–J in `strategies.py` — CMO, ADX, VWAP bands, CCI, TRIX, APO (vectorized, no LLM)
+- [x] `STRATEGY_REGISTRY` / `build_strategy` factory — all 10 strategies (A–J) in optimization loop
+- [x] `tradingagents/backtest/portfolio.py` — `TransactionIntent`, `VirtualPortfolio`, `signals_to_intents`
+- [x] `tradingagents/backtest/matcher.py` — `SimulatedMatcher` with slippage, limit-order stub, live/dummy feed
+- [x] Engine wired to `VirtualPortfolio` + `SimulatedMatcher` for position tracking (decoupled from signal math)
+- [x] Extended `tests/test_backtester.py` — indicator unit tests, signal boundaries, portfolio intents
+
 ### Task-5: Unified Custom LLM Providers
 - **Status:** Completed
 - [x] AtlasCloud.ai — `atlascloud` provider, `ATLASCLOUD_API_KEY`, `https://api.atlascloud.ai/v1`
