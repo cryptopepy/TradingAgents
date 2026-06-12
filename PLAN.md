@@ -4,7 +4,7 @@
 - Current Version: 0.3.0
 - Global Concurrency Strategy: Parallel Fan-Out
 - Asset Class: Crypto-only (no equities)
-- Last Active Task: Crypto-Only Framework Transition (committed `ca2944e`)
+- Last Active Task: CRYPTO-9/10 — stock branch cleanup & .env.example crypto keys
 
 ## High-Priority Epic: Crypto-Only Framework Transition
 
@@ -26,8 +26,8 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - **Removed:** Alpha Vantage modules, yfinance paths, `stocktwits.py`, equity `core_stock_tools.py`
 
 ### Follow-up / Technical Debt
-- [ ] CRYPTO-9: Remove residual `asset_type == "stock"` branches in `bull_researcher.py` / `bear_researcher.py`
-- [ ] CRYPTO-10: Document API keys in `.env.example` (CoinGecko, LunarCrush, CryptoCompare optional keys)
+- [x] CRYPTO-9: Remove residual `asset_type == "stock"` branches in `bull_researcher.py` / `bear_researcher.py`
+- [x] CRYPTO-10: Document API keys in `.env.example` (CoinGecko, LunarCrush, CryptoCompare optional keys)
 
 ## Implementation Checklist
 - [x] Task-1: Core Path Unification & CLI Streaming Restructuring
