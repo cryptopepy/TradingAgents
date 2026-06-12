@@ -547,29 +547,33 @@ def is_live_mode(config: Optional[dict] = None) -> bool:
 
 
 def fetch_live_price(symbol: str, config: Optional[dict] = None) -> float:
-    """Fetch current price via ccxt (live) or dummy feed (paper)."""
-    cfg = config or get_config()
-    if is_live_mode(cfg):
-        try:
-            import ccxt
+    """Fetch current price via live vendor chain (CryptoCompare → CoinGecko → Binance → placeholder)."""
+    from tradingagents.dataflows.live_prices import fetch_live_spot_price_value
 
-            pair = parse_crypto_pair(symbol)
-            exchange = ccxt.binance({"enableRateLimit": True})
-            ticker = exchange.fetch_ticker(pair.binance_symbol)
-            return float(ticker["last"])
-        except Exception as exc:
-            logger.warning("Live ccxt fetch failed for %s: %s — falling back to dummy", symbol, exc)
+    quote = fetch_live_spot_price_value(symbol, config)
+    logger.debug("Live price for %s: %.6f", symbol, quote)
+    return quote
 
-    from datetime import timezone
 
-    df = fetch_historical_crypto(
-        symbol,
-        datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        LookbackWindow.H24,
-    )
-    anchor = float(df["Close"].iloc[-1]) if not df.empty else 1.0
-    feed = DummyPriceFeed(anchor_price=anchor, symbol=symbol)
-    return float(feed.fetch_ticker()["last"])
+def compute_strategy_signal(
+    symbol: str,
+    strategy_name: str,
+    parameters: Dict[str, Any],
+    lookback: LookbackWindow | str,
+    end_date: Optional[str] = None,
+) -> str:
+    """Return ``long``, ``short``, or ``flat`` for the latest bar of ``strategy_name``."""
+    if strategy_name not in STRATEGY_REGISTRY:
+        return "flat"
+    lb = lookback if isinstance(lookback, LookbackWindow) else LookbackWindow(str(lookback))
+    end = end_date or datetime.now().strftime("%Y-%m-%d")
+    df = fetch_historical_crypto(symbol, end, lb)
+    if df.empty:
+        return "flat"
+    strategy = build_strategy(strategy_name, parameters)
+    signals = strategy.generate_signals(df)
+    last = int(signals.iloc[-1]) if len(signals) else 0
+    return {1: "long", -1: "short", 0: "flat"}.get(last, "flat")
 
 
 def deploy_winning_strategy(
@@ -585,15 +589,13 @@ def deploy_winning_strategy(
     lookback = LookbackWindow(optimization.winner.lookback)
     df = fetch_historical_crypto(optimization.symbol, optimization.end_date, lookback)
 
-    paper_signal = "flat"
-    if not df.empty and optimization.winner.strategy_name in STRATEGY_REGISTRY:
-        strategy = build_strategy(
-            optimization.winner.strategy_name,
-            optimization.winner.parameters,
-        )
-        signals = strategy.generate_signals(df)
-        last = int(signals.iloc[-1]) if len(signals) else 0
-        paper_signal = {1: "long", -1: "short", 0: "flat"}.get(last, "flat")
+    paper_signal = compute_strategy_signal(
+        optimization.symbol,
+        optimization.winner.strategy_name,
+        optimization.winner.parameters,
+        lookback,
+        optimization.end_date,
+    )
 
     return optimization.model_copy(
         update={"live_price": price, "paper_signal": paper_signal}

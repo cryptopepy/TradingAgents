@@ -22,6 +22,27 @@ def _headers() -> dict:
     return {"authorization": f"Apikey {key}"} if key else {}
 
 
+def fetch_spot_price(symbol: str) -> float | None:
+    """Latest spot price for a crypto pair via CryptoCompare /data/price."""
+    try:
+        pair = parse_crypto_pair(symbol)
+    except ValueError:
+        return None
+    fsym = pair.base
+    tsym = pair.quote if pair.quote not in ("USDT", "USDC", "BUSD") else "USD"
+    try:
+        data = http_get_json(
+            f"{_BASE_URL}/data/price",
+            params={"fsym": fsym, "tsyms": tsym},
+            headers=_headers(),
+        )
+        price = data.get(tsym)
+        return float(price) if price is not None else None
+    except Exception as exc:
+        logger.debug("CryptoCompare spot price failed for %s: %s", symbol, exc)
+        return None
+
+
 def fetch_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     """Daily OHLCV from CryptoCompare histoday endpoint."""
     pair = parse_crypto_pair(symbol)
