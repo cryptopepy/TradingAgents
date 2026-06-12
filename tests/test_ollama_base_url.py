@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import importlib
+import re
 
 import pytest
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip Rich/ANSI markup so capsys assertions match visible text."""
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -140,7 +148,7 @@ def test_confirm_endpoint_warns_on_missing_scheme(monkeypatch, capsys):
     import cli.utils as cli_utils
     importlib.reload(cli_utils)
     cli_utils.confirm_ollama_endpoint("0.0.0.128")
-    out = capsys.readouterr().out
+    out = _plain(capsys.readouterr().out)
     assert "missing a scheme" in out
     assert "http://<host>:11434/v1" in out
 
@@ -151,7 +159,7 @@ def test_confirm_endpoint_warns_on_non_default_port_remote(monkeypatch, capsys):
     import cli.utils as cli_utils
     importlib.reload(cli_utils)
     cli_utils.confirm_ollama_endpoint("http://remote-host/v1")
-    out = capsys.readouterr().out
+    out = _plain(capsys.readouterr().out)
     assert "port 11434" in out
 
 

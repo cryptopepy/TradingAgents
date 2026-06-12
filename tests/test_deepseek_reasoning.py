@@ -75,7 +75,7 @@ class TestDeepSeekReasoningContent:
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "Plan: buy NVDA.",
+                            "content": "Plan: buy BTC/USDT.",
                             "reasoning_content": "Step 1: trend is up. Step 2: ...",
                         },
                         "finish_reason": "stop",
@@ -216,7 +216,7 @@ class TestDeepSeekLiveStructuredOutput:
         )
         bound = client.with_structured_output(self._Pick)
         result = bound.invoke(
-            "Pick BUY or SELL or HOLD for a tech stock with strong earnings. "
+            "Pick BUY or SELL or HOLD for BTC/USDT with strong on-chain momentum. "
             "Confidence is a float between 0 and 1."
         )
         assert isinstance(result, self._Pick)

@@ -48,7 +48,7 @@ def _build_graph() -> StateGraph:
 class TestCheckpointResume(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.ticker = "TEST"
+        self.ticker = "BTC/USDT"
         self.date = "2026-04-20"
 
     def test_crash_and_resume(self):

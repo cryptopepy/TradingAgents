@@ -15,7 +15,7 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - [x] CRYPTO-3: State & CLI — `asset_type` defaults to `crypto`, remove stock/crypto mode selection
 - [x] CRYPTO-4: Analyst prompts & tools — perps/funding/OI, on-chain fundamentals, crypto sentiment/news
 - [x] CRYPTO-5: Backtest engine — 24/7/365 continuous tracking, no market-hours gaps
-- [x] CRYPTO-6: Tests — replace AAPL/NVDA/SPY fixtures with BTC/ETH/SOL pairs; pytest green
+- [x] CRYPTO-6: Tests — replace AAPL/NVDA/SPY fixtures with BTC/ETH/SOL pairs; pytest green (296 passed, 1 skipped: live DeepSeek)
 - [x] CRYPTO-7: Dependencies — remove yfinance; keep stockstats for indicator math on crypto OHLCV
 - [x] CRYPTO-8: Graph, risk guard, benchmark — BTC vs ETH baseline; end-to-end crypto symbols
 
