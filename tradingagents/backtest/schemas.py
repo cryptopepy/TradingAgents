@@ -44,3 +44,4 @@ class OptimizationResult(BaseModel):
     winner: Optional[WinningStrategySummary] = None
     live_price: Optional[float] = None
     paper_signal: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)

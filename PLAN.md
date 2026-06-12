@@ -60,6 +60,46 @@ Simulated trading is the primary product surface; LLM analysis feeds optional co
 - [ ] PAPER-8: Persist paper session state to disk (resume across restarts)
 - [ ] PAPER-9: Web UI (Streamlit) for portfolio dashboard
 
+## Epic: Multi-Phase Platform Refinement (v0.4.x)
+
+Atomic commits per phase: `feat/P{n}-*: ...` — do not bundle phases.
+
+### Phase 1 — Interactive UI & Multi-Strategy Backtest Harness (`feat/P1-*`)
+- [ ] P1-1: Update PLAN.md with full blueprint and task IDs
+- [ ] P1-2: Fix bare `tradingagents backtest` — validation, no silent empty exits
+- [ ] P1-3: Interactive prompts (questionary/rich) for ticker, date, horizons, equity, risk
+- [ ] P1-4: Post-analysis menu — `> Run Historical Optimization Backtest` selection loop
+- [ ] P1-5: Rich results table sorted by profit factor, max drawdown, net return; WINNER first
+- [ ] P1-6: Tests — `test_backtest_validation.py`, post-analysis table/menu updates
+
+### Phase 2 — Live Market Feed Integration (`feat/P2-*`)
+- [ ] P2-1: Unified router `tradingagents/dataflows/live_feed.py` (wrap/refactor `live_prices.py`)
+- [ ] P2-2: Parse `COINGECKO_API_KEY`, `CRYPTOCOMPARE_API_KEY` from env
+- [ ] P2-3: CoinGecko — metadata, circulating supply, global market cap
+- [ ] P2-4: CryptoCompare — minute/hourly REST tickers (WebSocket if feasible)
+- [ ] P2-5: Resilient 429/network fallback — localized mock ticker from last anchor
+- [ ] P2-6: Tests — `test_live_feed.py` fallback and vendor routing
+
+### Phase 3 — High-Fidelity Paper Trading (`feat/P3-*`)
+- [ ] P3-1: `VirtualPortfolio` in `simulator/core.py` — cash ($100k default), long/short margin, slippage, fees
+- [ ] P3-2: Post-backtest prompt — `> Deploy Optimal Strategy to Live Paper Trading Simulator`
+- [ ] P3-3: Background async/daemon loop monitoring live feed, executing winning strategy rules
+- [ ] P3-4: PAPER-8 — persist portfolio state locally (JSON or SQLite)
+- [ ] P3-5: Tests — `VirtualPortfolio`, paper session persistence
+
+### Phase 4 — Closed-Loop Autonomous Re-Optimization (`feat/P4-*`)
+- [ ] P4-1: Trailing performance watchdog in simulation loop
+- [ ] P4-2: Config — `DRAWDOWN_TIME_WINDOW`, `MAX_ALLOWED_DRAWDOWN_PCT` in `default_config.py`
+- [ ] P4-3: On breach — halt signals, fresh historical slice, re-run 10-strategy optimization, swap strategy
+- [ ] P4-4: Log `[AUTONOMOUS ROTATION]: Strategy changed from [Old] to [New] due to threshold violation.`
+- [ ] P4-5: Runtime-adjustable thresholds (CLI prompts + config; LLM override hooks where natural)
+- [ ] P4-6: Tests — rotation logging, drawdown breach triggers
+
+### Phase 5 — README Alignment (`feat/P5-*`)
+- [ ] P5-1: README overhaul — analyzer → algorithmic paper trading platform evolution
+- [ ] P5-2: Document all config keys (required vs optional)
+- [ ] P5-3: Step-by-step guides — analyst flow, interactive backtester, autonomous re-optimization, virtual portfolio UI
+
 ## Active Task Logs
 
 ### Task-1: Core Path Unification & CLI Streaming Restructuring

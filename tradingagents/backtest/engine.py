@@ -495,15 +495,21 @@ def optimize_strategies(
     strategies = list(strategies or DEFAULT_STRATEGIES)
     windows = list(lookbacks or LookbackWindow)
     all_metrics: List[StrategyMetrics] = []
+    warnings: List[str] = []
     metric_callback: Optional[Callable[[StrategyMetrics], None]] = on_metric
 
     for lookback in windows:
         try:
             df = fetch_historical_crypto(symbol, end_date, lookback)
         except Exception as exc:
-            logger.warning("Historic fetch failed for %s %s: %s", symbol, lookback.value, exc)
+            msg = f"{lookback.value}: historic fetch failed — {exc}"
+            logger.warning("%s", msg)
+            warnings.append(msg)
             continue
         if len(df) < 30:
+            warnings.append(
+                f"{lookback.value}: insufficient bars ({len(df)} < 30) for {symbol}"
+            )
             continue
         for strategy in strategies:
             result = run_strategy_on_frame(
@@ -531,11 +537,17 @@ def optimize_strategies(
             num_trades=best.num_trades,
         )
 
+    if not all_metrics and not warnings:
+        warnings.append(
+            f"No lookback windows were evaluated for {symbol} on {end_date}."
+        )
+
     return OptimizationResult(
         symbol=symbol,
         end_date=end_date,
         results=all_metrics,
         winner=winner_summary,
+        warnings=warnings,
     )
 
 

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cli.post_analysis import (
+    _rank_strategy_rows,
     render_optimization_table,
     run_interactive_backtest,
     show_post_analysis_menu,
@@ -46,6 +47,11 @@ def _sample_optimization() -> OptimizationResult:
 
 @pytest.mark.unit
 class TestPostAnalysisMenu:
+    def test_rank_strategy_rows_puts_winner_first(self):
+        metrics = _sample_optimization().results
+        ranked = _rank_strategy_rows(metrics, "RSI Mean Reversion")
+        assert ranked[0].strategy_name == "RSI Mean Reversion"
+
     def test_render_optimization_table_marks_winner(self):
         from io import StringIO
 

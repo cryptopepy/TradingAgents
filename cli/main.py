@@ -1337,12 +1337,22 @@ def analyze(
 
 @app.command("backtest")
 def backtest_cmd(
-    ticker: str = typer.Option("BTC/USDT", "--ticker", "-t", help="Crypto pair"),
-    date: str = typer.Option(
+    ticker: Optional[str] = typer.Option(
+        None,
+        "--ticker",
+        "-t",
+        help="Crypto pair (prompted when omitted in interactive mode).",
+    ),
+    date: Optional[str] = typer.Option(
         None,
         "--date",
         "-d",
-        help="End date YYYY-MM-DD (default: today)",
+        help="End date YYYY-MM-DD (prompted when omitted in interactive mode).",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Prompt for missing parameters (default on TTY).",
     ),
     live: bool = typer.Option(
         False,
@@ -1354,19 +1364,43 @@ def backtest_cmd(
         "--paper",
         help="After backtest, start paper trading simulation with the winning strategy.",
     ),
+    equity: Optional[float] = typer.Option(
+        None,
+        "--equity",
+        help="Starting portfolio equity in USD (default: 10000).",
+    ),
 ):
-    """Run strategy backtest optimization without full LLM analysis."""
+    """Run 10-strategy historical optimization (8h / 24h / 7d horizons)."""
+    from cli.backtest_interactive import apply_params_to_config, resolve_backtest_params
     from cli.post_analysis import prompt_deploy_simulator, render_optimization_table, run_backtest_with_progress
-    from tradingagents.backtest import deploy_winning_strategy
+    from tradingagents.backtest import BacktestValidationError, deploy_winning_strategy, format_optimization_summary
 
-    analysis_date = date or datetime.datetime.now().strftime("%Y-%m-%d")
-    config = DEFAULT_CONFIG.copy()
-    if live:
-        config["live_mode"] = True
     try:
-        optimization = run_backtest_with_progress(ticker, analysis_date)
+        params = resolve_backtest_params(
+            ticker=ticker,
+            end_date=date,
+            interactive=interactive,
+            equity=equity,
+            live_mode=live,
+        )
+    except BacktestValidationError as exc:
+        console.print(f"[red]Backtest configuration error:[/red]\n{exc}")
+        raise typer.Exit(1) from exc
+
+    config = apply_params_to_config(params, DEFAULT_CONFIG.copy())
+    try:
+        optimization = run_backtest_with_progress(
+            params.ticker,
+            params.end_date,
+            lookbacks=list(params.lookbacks),
+            stop_loss_pct=params.stop_loss_pct,
+            transaction_cost_pct=params.transaction_cost_pct,
+        )
         optimization = deploy_winning_strategy(optimization, config)
-        summary = __import__("tradingagents.backtest", fromlist=["format_optimization_summary"]).format_optimization_summary(optimization)
+        summary = format_optimization_summary(optimization)
+    except BacktestValidationError as exc:
+        console.print(f"[red]Backtest validation error:[/red]\n{exc}")
+        raise typer.Exit(1) from exc
     except Exception as exc:
         console.print(f"[red]Backtest failed: {exc}[/red]")
         raise typer.Exit(1) from exc

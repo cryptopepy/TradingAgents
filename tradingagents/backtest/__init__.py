@@ -25,9 +25,16 @@ from .portfolio import (
 )
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, build_strategy
+from .validation import (
+    BacktestValidationError,
+    require_optimization_results,
+    validate_end_date,
+    validate_ticker,
+)
 
 __all__ = [
     "BacktestResult",
+    "BacktestValidationError",
     "DEFAULT_STRATEGIES",
     "Direction",
     "LookbackWindow",
@@ -50,7 +57,10 @@ __all__ = [
     "format_optimization_summary",
     "is_live_mode",
     "optimize_strategies",
+    "require_optimization_results",
     "run_strategy_backtest",
     "run_strategy_on_frame",
     "signals_to_intents",
+    "validate_end_date",
+    "validate_ticker",
 ]

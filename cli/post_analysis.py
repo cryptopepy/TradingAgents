@@ -12,10 +12,12 @@ from rich.table import Table
 
 from tradingagents.backtest import (
     DEFAULT_STRATEGIES,
+    BacktestValidationError,
     LookbackWindow,
     OptimizationResult,
     deploy_winning_strategy,
     optimize_strategies,
+    require_optimization_results,
 )
 from tradingagents.backtest.schemas import StrategyMetrics
 from cli.paper_trading import prompt_paper_options, run_paper_session
@@ -24,15 +26,15 @@ console = Console()
 
 POST_ANALYSIS_CHOICES = [
     questionary.Choice(
-        title="Run Automated Historical Multi-Strategy Backtest (8h, 24h, 7d)",
+        title="> Run Historical Optimization Backtest (10 strategies × 8h/24h/7d)",
         value="auto_backtest",
     ),
     questionary.Choice(
-        title="Customize Backtest Horizon & Parameters",
+        title="> Customize Backtest Horizon & Risk Parameters",
         value="custom_backtest",
     ),
     questionary.Choice(
-        title="Start Paper Trading Simulation (live prices, portfolio tracking)",
+        title="> Deploy Optimal Strategy to Live Paper Trading Simulator",
         value="paper_trade",
     ),
     questionary.Choice(
@@ -53,7 +55,23 @@ def _aggregate_best_per_strategy(metrics: Sequence[StrategyMetrics]) -> list[Str
         existing = best.get(m.strategy_name)
         if existing is None or m.net_profit_ratio > existing.net_profit_ratio:
             best[m.strategy_name] = m
-    return sorted(best.values(), key=lambda x: x.net_profit_ratio, reverse=True)
+    return list(best.values())
+
+
+def _rank_strategy_rows(
+    rows: Sequence[StrategyMetrics],
+    winner_name: str | None,
+) -> list[StrategyMetrics]:
+    """Sort by profit factor (desc), max drawdown (asc), net return (desc); winner first."""
+    ranked = sorted(
+        rows,
+        key=lambda m: (-m.profit_factor, m.max_drawdown, -m.net_profit_ratio),
+    )
+    if not winner_name:
+        return ranked
+    winner_rows = [r for r in ranked if r.strategy_name == winner_name]
+    rest = [r for r in ranked if r.strategy_name != winner_name]
+    return winner_rows + rest
 
 
 def render_optimization_table(optimization: OptimizationResult) -> Table:
@@ -65,7 +83,10 @@ def render_optimization_table(optimization: OptimizationResult) -> Table:
     table.add_column("Net Return", justify="right")
     table.add_column("", justify="center")
 
-    rows = _aggregate_best_per_strategy(optimization.results)
+    rows = _rank_strategy_rows(
+        _aggregate_best_per_strategy(optimization.results),
+        optimization.winner.strategy_name if optimization.winner else None,
+    )
     winner_name = optimization.winner.strategy_name if optimization.winner else None
 
     for row in rows:
@@ -122,7 +143,7 @@ def run_backtest_with_progress(
             on_metric=_advance,
         )
 
-    return result
+    return require_optimization_results(result)
 
 
 def prompt_custom_backtest_params() -> dict:
@@ -168,7 +189,7 @@ def prompt_deploy_simulator(
         return
 
     deploy = questionary.confirm(
-        "Start full Paper Trading Simulation with the winning strategy?",
+        "Deploy optimal strategy to the live paper trading simulator?",
         default=True,
     ).ask()
     if not deploy:
@@ -207,6 +228,9 @@ def run_interactive_backtest(
             transaction_cost_pct=params.get("transaction_cost_pct", 0.001),
         )
         optimization = deploy_winning_strategy(optimization, config)
+    except BacktestValidationError as exc:
+        console.print(f"[red]Backtest validation error:[/red]\n{exc}")
+        return None
     except Exception as exc:
         console.print(f"[red]Backtest failed: {exc}[/red]")
         return None
