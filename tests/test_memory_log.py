@@ -254,14 +254,14 @@ class TestTradingMemoryLogCore:
 
     def test_get_past_context_same_ticker(self, tmp_path):
         log = make_log(tmp_path)
-        _seed_completed(tmp_path, "BTC/USDT", "2026-01-05", "Buy BTC/USDT — AI capex thesis intact.", "Directionally correct.")
+        _seed_completed(tmp_path, "BTC/USDT", "2026-01-05", "Buy BTC/USDT — spot ETF inflows thesis intact.", "Directionally correct.")
         ctx = log.get_past_context("BTC/USDT")
         assert "Past analyses of BTC/USDT" in ctx
         assert "Buy BTC/USDT" in ctx
 
     def test_get_past_context_cross_ticker(self, tmp_path):
         log = make_log(tmp_path)
-        _seed_completed(tmp_path, "ETH/USDT", "2026-01-05", "Buy ETH/USDT — Services growth.", "Correct.")
+        _seed_completed(tmp_path, "ETH/USDT", "2026-01-05", "Buy ETH/USDT — L2 rollup activity growth.", "Correct.")
         ctx = log.get_past_context("BTC/USDT")
         assert "Recent cross-ticker lessons" in ctx
         assert "Past analyses of BTC/USDT" not in ctx
@@ -364,9 +364,9 @@ class TestTradingMemoryLogCore:
     def test_rating_label_wins_over_prose_with_markdown(self, tmp_path):
         """Rating: **Sell** must win even when prose contains a conflicting rating word."""
         decision = (
-            "The buy thesis is weakened by guidance.\n"
+            "The buy thesis is weakened by macro headwinds.\n"
             "Rating: **Sell**\n"
-            "Exit before earnings."
+            "Exit before the token unlock."
         )
         log = make_log(tmp_path)
         log.store_decision("BTC/USDT", "2026-01-10", decision)
@@ -418,11 +418,11 @@ class TestDeferredReflection:
         log.update_with_outcome("ETH/USDT", "2026-01-11", 0.01, -0.01, 5, "Neutral result.")
         entries = log.load_entries()
         assert len(entries) == 3
-        nvda, aapl, msft = entries
-        assert nvda["ticker"] == "BTC/USDT" and nvda["pending"] is True
-        assert aapl["ticker"] == "ETH/USDT" and aapl["pending"] is False
-        assert aapl["reflection"] == "Neutral result."
-        assert msft["ticker"] == "SOL/USDT" and msft["pending"] is True
+        btc_entry, eth_entry, sol_entry = entries
+        assert btc_entry["ticker"] == "BTC/USDT" and btc_entry["pending"] is True
+        assert eth_entry["ticker"] == "ETH/USDT" and eth_entry["pending"] is False
+        assert eth_entry["reflection"] == "Neutral result."
+        assert sol_entry["ticker"] == "SOL/USDT" and sol_entry["pending"] is True
 
     def test_update_atomic_write(self, tmp_path):
         """A pre-existing .tmp file is overwritten; the log is correctly updated."""
@@ -644,7 +644,7 @@ class TestPortfolioManagerInjection:
         decision = PortfolioDecision(
             rating=PortfolioRating.OVERWEIGHT,
             executive_summary="Build position gradually over the next two weeks.",
-            investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
+            investment_thesis="ETH staking yield thesis intact; spot ETF flows constructive.",
             price_target=215.0,
             time_horizon="3-6 months",
         )
@@ -654,7 +654,7 @@ class TestPortfolioManagerInjection:
         md = result["final_trade_decision"]
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
-        assert "**Investment Thesis**: AI capex cycle" in md
+        assert "**Investment Thesis**: ETH staking yield thesis" in md
         assert "**Price Target**: 215.0" in md
         assert "**Time Horizon**: 3-6 months" in md
 
@@ -662,7 +662,7 @@ class TestPortfolioManagerInjection:
         """If a provider does not support with_structured_output, the agent
         falls back to a plain invoke and returns whatever prose the model
         produced, so the pipeline never blocks."""
-        plain_response = "**Rating**: Sell\n\nExit ahead of guidance."
+        plain_response = "**Rating**: Sell\n\nExit ahead of the token unlock."
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)

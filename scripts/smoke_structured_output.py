@@ -42,25 +42,22 @@ PROVIDER_DEFAULTS = {
 }
 
 
-# Minimal but realistic state for the three agents.
+# Minimal but realistic state for the three agents (crypto pair).
 DEBATE_HISTORY = """
-Bull Analyst: NVDA's data-center revenue grew 60% YoY last quarter, driven by
-Blackwell ramp; sovereign AI deals with multiple governments add a $40B+
-multi-year tailwind. Margins remain above peer average.
-
-Bear Analyst: Concentration risk is real — top three customers are >40% of
-revenue. Any pause in hyperscaler capex would compress the multiple. China
-export restrictions still cap a meaningful portion of demand.
+Bull Analyst: ETH/USDT spot ETF inflows and L2 activity support upside.
+Bear Analyst: Macro risk and elevated funding rates argue for caution.
 """
+
+SMOKE_TICKER = "ETH/USDT"
 
 
 def _make_rm_state():
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": SMOKE_TICKER,
         "investment_debate_state": {
             "history": DEBATE_HISTORY,
-            "bull_history": "Bull Analyst: NVDA's data-center revenue grew 60% YoY...",
-            "bear_history": "Bear Analyst: Concentration risk is real...",
+            "bull_history": "Bull Analyst: ETH staking yield and on-chain volume remain constructive.",
+            "bear_history": "Bear Analyst: Funding rates elevated; watch for mean reversion.",
             "current_response": "",
             "judge_decision": "",
             "count": 1,
@@ -70,17 +67,17 @@ def _make_rm_state():
 
 def _make_trader_state(investment_plan: str):
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": SMOKE_TICKER,
         "investment_plan": investment_plan,
     }
 
 
 def _make_pm_state(investment_plan: str, trader_plan: str):
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": SMOKE_TICKER,
         "past_context": "",
         "risk_debate_state": {
-            "history": "Aggressive: lean in. Conservative: trim. Neutral: balanced sizing.",
+            "history": "Aggressive: add on dips. Conservative: trim exposure. Neutral: balanced sizing.",
             "aggressive_history": "Aggressive: ...",
             "conservative_history": "Conservative: ...",
             "neutral_history": "Neutral: ...",
