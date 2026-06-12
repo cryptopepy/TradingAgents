@@ -59,21 +59,23 @@ class TestPropagateUnifiedPath:
         chunks = []
         final_state = _minimal_final_state()
 
-        with patch.object(
-            TradingAgentsGraph,
-            "_run_graph",
-            return_value=(final_state, "Hold"),
-        ) as mock_run:
-            graph = TradingAgentsGraph(
-                selected_analysts=["market"],
-                config=config,
-                debug=False,
-                callbacks=[],
-            )
+        graph = TradingAgentsGraph(
+            selected_analysts=["market"],
+            config=config,
+            debug=False,
+            callbacks=[],
+        )
 
-            def on_chunk(chunk):
-                chunks.append(chunk)
+        def on_chunk(chunk):
+            chunks.append(chunk)
 
+        stream_chunks = [final_state]
+
+        def fake_stream(init_state, **kwargs):
+            for chunk in stream_chunks:
+                yield chunk
+
+        with patch.object(graph.graph, "stream", side_effect=fake_stream):
             state, signal = graph.propagate(
                 "NVDA",
                 "2026-01-10",
@@ -83,10 +85,7 @@ class TestPropagateUnifiedPath:
 
         assert signal == "Hold"
         assert state["final_trade_decision"].startswith("**Rating**")
-        mock_run.assert_called_once()
-        _, kwargs = mock_run.call_args
-        assert callable(kwargs.get("stream_callback"))
-        assert kwargs.get("callbacks") is not None
+        assert len(chunks) == 1
 
         entries = graph.memory_log.load_entries()
         assert len(entries) == 1

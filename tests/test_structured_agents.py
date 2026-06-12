@@ -162,7 +162,8 @@ class TestTraderAgent:
         llm.invoke.return_value = MagicMock(content=plain_response)
         trader = create_trader(llm)
         result = trader(_make_trader_state())
-        assert result["trader_investment_plan"] == plain_response
+        assert plain_response in result["trader_investment_plan"]
+        assert "**Reasoning**:" in result["trader_investment_plan"]
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +349,9 @@ class TestSentimentAnalystAgent:
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain)
-        assert create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"] == plain
+        report = create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"]
+        assert plain in report
+        assert "**Overall Sentiment:**" in report
 
     def test_falls_back_to_freetext_when_structured_call_fails(self):
         plain = "Fallback free-text sentiment."
@@ -357,4 +360,6 @@ class TestSentimentAnalystAgent:
         llm = MagicMock()
         llm.with_structured_output.return_value = structured
         llm.invoke.return_value = MagicMock(content=plain)
-        assert create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"] == plain
+        report = create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"]
+        assert plain in report
+        assert "**Confidence:**" in report

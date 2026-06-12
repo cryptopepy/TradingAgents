@@ -94,13 +94,13 @@ def apply_risk_guard(state: Dict[str, Any], config: Dict[str, Any]) -> RiskGuard
             f"Position size {position_pct:.1f}% exceeds limit {max_position_pct:.1f}%"
         )
 
-    # Simple VaR proxy: position% × assumed daily vol (2%) annualized heuristic
+    # Simple 1-day VaR proxy: position weight × daily vol (% of portfolio)
     if position_pct is not None:
         assumed_daily_vol = float(config.get("assumed_daily_vol_pct", 2.0))
-        var_proxy = position_pct * assumed_daily_vol / 100.0
-        if var_proxy * 100 > max_var_pct:
+        var_proxy_pct = (position_pct / 100.0) * assumed_daily_vol
+        if var_proxy_pct > max_var_pct:
             violations.append(
-                f"Estimated VaR proxy {var_proxy * 100:.2f}% exceeds {max_var_pct:.1f}%"
+                f"Estimated VaR proxy {var_proxy_pct:.2f}% exceeds {max_var_pct:.1f}%"
             )
         if position_pct > max_concentration_pct:
             violations.append(

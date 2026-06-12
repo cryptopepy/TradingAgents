@@ -736,7 +736,9 @@ class TestPortfolioManagerInjection:
         llm.invoke.return_value = MagicMock(content=plain_response)
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
-        assert result["final_trade_decision"] == plain_response
+        decision = result["final_trade_decision"]
+        assert plain_response in decision
+        assert "**Executive Summary**:" in decision
 
     # get_past_context ordering and limits
 
