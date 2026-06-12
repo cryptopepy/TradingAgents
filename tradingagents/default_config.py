@@ -25,6 +25,9 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PAPER_TICK_INTERVAL_SECONDS": "paper_tick_interval_seconds",
     "TRADINGAGENTS_PAPER_INITIAL_EQUITY": "paper_initial_equity",
     "TRADINGAGENTS_PAPER_ADAPTIVE_ENABLED": "paper_adaptive_enabled",
+    "TRADINGAGENTS_DRAWDOWN_TIME_WINDOW": "drawdown_time_window_minutes",
+    "TRADINGAGENTS_MAX_ALLOWED_DRAWDOWN_PCT": "max_allowed_drawdown_pct",
+    "TRADINGAGENTS_PAPER_STATE_ENABLED": "paper_state_persistence",
 }
 
 
@@ -88,8 +91,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "paper_loss_review_minutes": 60,
     "paper_loss_threshold_pct": 5.0,
     "paper_tick_interval_seconds": 10.0,
-    "paper_initial_equity": 10_000.0,
+    "paper_initial_equity": 100_000.0,
     "paper_adaptive_enabled": True,
+    "paper_state_persistence": True,
+    # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
+    "drawdown_time_window_minutes": 60,
+    "max_allowed_drawdown_pct": 5.0,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",

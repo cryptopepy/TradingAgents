@@ -27,6 +27,11 @@ from tradingagents.simulator.core import (
     TickEvaluationResult,
     evaluate_live_market_tick,
 )
+from tradingagents.simulator.persistence import (
+    load_paper_session,
+    restore_portfolio,
+    save_paper_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,18 +75,33 @@ class PaperTradingEngine:
         self.on_state_change = on_state_change
         self.on_strategy_switch = on_strategy_switch
 
-        equity = session.initial_equity or float(self.config.get("paper_initial_equity", 10_000.0))
-        self.portfolio = VirtualPortfolio(initial_equity=equity)
+        equity = session.initial_equity or float(self.config.get("paper_initial_equity", 100_000.0))
+        fee_bps = float(session.slippage_bps)
+        self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
+        self._restore_persisted_session()
         self.matcher = SimulatedMatcher(slippage_bps=session.slippage_bps, portfolio=self.portfolio)
         self._dummy_feed: Optional[DummyPriceFeed] = None
         self._tick_history: List[TickEvaluationResult] = []
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._signals_halted = False
 
+        review_minutes = float(
+            self.config.get(
+                "drawdown_time_window_minutes",
+                self.config.get("paper_loss_review_minutes", 60),
+            )
+        )
+        threshold_pct = float(
+            self.config.get(
+                "max_allowed_drawdown_pct",
+                self.config.get("paper_loss_threshold_pct", 5.0),
+            )
+        )
         self._adaptive = AdaptiveStrategyMonitor(
-            loss_review_minutes=float(self.config.get("paper_loss_review_minutes", 60)),
-            loss_threshold_pct=float(self.config.get("paper_loss_threshold_pct", 5.0)),
-            initial_equity=equity,
+            loss_review_minutes=review_minutes,
+            loss_threshold_pct=threshold_pct,
+            initial_equity=self.portfolio.initial_equity,
         )
 
     @property
@@ -116,10 +136,51 @@ class PaperTradingEngine:
         self.session.signal = signal
         return signal
 
+    def _restore_persisted_session(self) -> None:
+        if not self.config.get("paper_state_persistence", True):
+            return
+        saved = load_paper_session(self.session.symbol, self.config)
+        if not saved:
+            return
+        self.portfolio = restore_portfolio(saved)
+        self.session.strategy_name = saved.get("strategy_name", self.session.strategy_name)
+        self.session.lookback = saved.get("lookback", self.session.lookback)
+        self.session.parameters = dict(saved.get("parameters") or self.session.parameters)
+        self.session.signal = StrategySignal.from_string(saved.get("signal", self.session.signal.value))
+
+    def _persist_session(self, quote: LivePrice) -> None:
+        if not self.config.get("paper_state_persistence", True):
+            return
+        save_paper_session(
+            symbol=self.session.symbol,
+            strategy_name=self.session.strategy_name,
+            lookback=self.session.lookback,
+            signal=self.session.signal.value,
+            portfolio=self.portfolio,
+            parameters=self.session.parameters,
+            extra={"price": quote.price, "price_source": quote.source.value},
+            config=self.config,
+        )
+
+    def _log_autonomous_rotation(self, old_name: str, new_name: str) -> None:
+        message = (
+            f"[AUTONOMOUS ROTATION]: Strategy changed from [{old_name}] to [{new_name}] "
+            "due to threshold violation."
+        )
+        logger.warning(message)
+        log_dir = self.config.get("results_dir")
+        if log_dir:
+            from pathlib import Path
+
+            path = Path(log_dir) / "paper_rotation.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")
+
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""
         quote = self._fetch_price()
-        signal = self.refresh_signal()
+        signal = self.refresh_signal() if not self._signals_halted else StrategySignal.FLAT
         result = evaluate_live_market_tick(
             self.portfolio,
             quote.price,
@@ -136,6 +197,7 @@ class PaperTradingEngine:
             self._run_adaptive_rebacktest(result.timestamp)
 
         state = self.get_state(quote)
+        self._persist_session(quote)
         if self.on_state_change:
             self.on_state_change(state)
         return result
@@ -148,14 +210,17 @@ class PaperTradingEngine:
             self.session.symbol,
             self._adaptive.current_drawdown_pct(),
         )
+        self._signals_halted = True
         try:
             optimization = optimize_strategies(self.session.symbol, end_date)
         except Exception as exc:
             logger.warning("Adaptive re-backtest failed: %s", exc)
+            self._signals_halted = False
             return
 
         if optimization.winner is None:
             self._adaptive.mark_rebacktest_done()
+            self._signals_halted = False
             return
 
         old_name = self.session.strategy_name
@@ -175,9 +240,10 @@ class PaperTradingEngine:
             )
             if self.on_strategy_switch:
                 self.on_strategy_switch(old_name, new_name)
-            logger.info("Switched paper strategy %s → %s", old_name, new_name)
+            self._log_autonomous_rotation(old_name, new_name)
 
         self._adaptive.mark_rebacktest_done()
+        self._signals_halted = False
 
     def get_state(self, quote: Optional[LivePrice] = None) -> PaperTradingState:
         """Current portfolio and session snapshot."""

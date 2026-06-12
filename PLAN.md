@@ -81,19 +81,19 @@ Atomic commits per phase: `feat/P{n}-*: ...` — do not bundle phases.
 - [x] P2-6: Tests — `test_live_feed.py` fallback and vendor routing
 
 ### Phase 3 — High-Fidelity Paper Trading (`feat/P3-*`)
-- [ ] P3-1: `VirtualPortfolio` in `simulator/core.py` — cash ($100k default), long/short margin, slippage, fees
-- [ ] P3-2: Post-backtest prompt — `> Deploy Optimal Strategy to Live Paper Trading Simulator`
-- [ ] P3-3: Background async/daemon loop monitoring live feed, executing winning strategy rules
-- [ ] P3-4: PAPER-8 — persist portfolio state locally (JSON or SQLite)
-- [ ] P3-5: Tests — `VirtualPortfolio`, paper session persistence
+- [x] P3-1: `VirtualPortfolio` in `simulator/core.py` — cash ($100k default), long/short margin, slippage, fees
+- [x] P3-2: Post-backtest prompt — `> Deploy Optimal Strategy to Live Paper Trading Simulator`
+- [x] P3-3: Background async/daemon loop monitoring live feed, executing winning strategy rules
+- [x] P3-4: PAPER-8 — persist portfolio state locally (JSON or SQLite)
+- [x] P3-5: Tests — `VirtualPortfolio`, paper session persistence
 
 ### Phase 4 — Closed-Loop Autonomous Re-Optimization (`feat/P4-*`)
-- [ ] P4-1: Trailing performance watchdog in simulation loop
-- [ ] P4-2: Config — `DRAWDOWN_TIME_WINDOW`, `MAX_ALLOWED_DRAWDOWN_PCT` in `default_config.py`
-- [ ] P4-3: On breach — halt signals, fresh historical slice, re-run 10-strategy optimization, swap strategy
-- [ ] P4-4: Log `[AUTONOMOUS ROTATION]: Strategy changed from [Old] to [New] due to threshold violation.`
-- [ ] P4-5: Runtime-adjustable thresholds (CLI prompts + config; LLM override hooks where natural)
-- [ ] P4-6: Tests — rotation logging, drawdown breach triggers
+- [x] P4-1: Trailing performance watchdog in simulation loop
+- [x] P4-2: Config — `DRAWDOWN_TIME_WINDOW`, `MAX_ALLOWED_DRAWDOWN_PCT` in `default_config.py`
+- [x] P4-3: On breach — halt signals, fresh historical slice, re-run 10-strategy optimization, swap strategy
+- [x] P4-4: Log `[AUTONOMOUS ROTATION]: Strategy changed from [Old] to [New] due to threshold violation.`
+- [x] P4-5: Runtime-adjustable thresholds (CLI prompts + config; LLM override hooks where natural)
+- [x] P4-6: Tests — rotation logging, drawdown breach triggers
 
 ### Phase 5 — README Alignment (`feat/P5-*`)
 - [ ] P5-1: README overhaul — analyzer → algorithmic paper trading platform evolution

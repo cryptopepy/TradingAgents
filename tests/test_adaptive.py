@@ -1,6 +1,7 @@
 """Adaptive strategy monitor."""
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -44,3 +45,48 @@ class TestAdaptiveStrategyMonitor:
         monitor.mark_rebacktest_done()
         assert monitor.should_rebacktest(now + timedelta(minutes=15)) is False
         assert monitor.rebacktest_count == 1
+
+
+@pytest.mark.unit
+class TestAutonomousRotationLog:
+    @patch("tradingagents.simulator.paper_engine.optimize_strategies")
+    @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
+    @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
+    def test_rotation_log_written(self, mock_price, _signal, mock_optimize, tmp_path):
+        from datetime import datetime, timezone
+
+        from tradingagents.backtest.schemas import OptimizationResult, WinningStrategySummary
+        from tradingagents.dataflows.live_prices import LivePrice, PriceSource
+        from tradingagents.simulator import PaperTradingEngine, PaperTradingSession, StrategySignal
+
+        mock_price.return_value = LivePrice(
+            symbol="BTC/USDT",
+            price=50_000.0,
+            source=PriceSource.PLACEHOLDER,
+            timestamp=datetime.now(timezone.utc),
+        )
+        mock_optimize.return_value = OptimizationResult(
+            symbol="BTC/USDT",
+            end_date="2026-06-12",
+            results=[],
+            winner=WinningStrategySummary(
+                strategy_name="trix_momentum",
+                lookback="8h",
+                historical_profit_ratio=0.05,
+            ),
+        )
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        config = {
+            "results_dir": str(tmp_path),
+            "paper_state_persistence": False,
+        }
+        engine = PaperTradingEngine(session, config)
+        engine._log_autonomous_rotation("ema_crossover", "trix_momentum")
+        log_file = tmp_path / "paper_rotation.log"
+        assert log_file.exists()
+        assert "[AUTONOMOUS ROTATION]" in log_file.read_text(encoding="utf-8")

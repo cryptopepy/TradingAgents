@@ -13,7 +13,20 @@ from pydantic import BaseModel, Field
 
 from tradingagents.backtest.engine import fetch_live_price, is_live_mode
 from tradingagents.backtest.matcher import SimulatedMatcher
-from tradingagents.backtest.portfolio import Direction, VirtualPortfolio
+from tradingagents.backtest.portfolio import Direction, PortfolioSnapshot, VirtualPortfolio
+
+# High-fidelity paper portfolio (cash, margin, fees) — shared with backtest matcher.
+__all__ = [
+    "AssetPosition",
+    "PaperTradingSession",
+    "PortfolioSnapshot",
+    "StrategySignal",
+    "TickEvaluationResult",
+    "VirtualPortfolio",
+    "evaluate_live_market_tick",
+    "run_polling_loop",
+    "start_paper_trading_scaffold",
+]
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 

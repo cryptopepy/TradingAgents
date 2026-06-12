@@ -45,15 +45,28 @@ class PortfolioSnapshot(BaseModel):
 
 
 class VirtualPortfolio:
-    """In-memory portfolio for backtest and paper-trading simulation."""
+    """In-memory portfolio for backtest and paper-trading simulation.
 
-    def __init__(self, initial_equity: float = 1.0) -> None:
+    Paper trading defaults to ``$100,000`` cash with configurable fees and
+    long/short margin via per-intent ``leverage`` and ``sizing_pct``.
+    """
+
+    def __init__(
+        self,
+        initial_equity: float = 1.0,
+        *,
+        fee_bps: float = 10.0,
+        default_leverage: float = 1.0,
+    ) -> None:
         self.initial_equity = initial_equity
         self.cash = initial_equity
         self.equity = initial_equity
+        self.fee_bps = fee_bps
+        self.default_leverage = default_leverage
         self.positions: Dict[str, Dict[str, Any]] = {}
         self._last_prices: Dict[str, float] = {}
         self._history: List[PortfolioSnapshot] = []
+        self.total_fees_paid: float = 0.0
 
     @property
     def margin_used(self) -> float:
@@ -67,12 +80,20 @@ class VirtualPortfolio:
     def margin_available(self) -> float:
         return max(self.equity - self.margin_used, 0.0)
 
+    def _charge_fee(self, notional: float) -> None:
+        fee = notional * (self.fee_bps / 10_000.0)
+        self.cash -= fee
+        self.total_fees_paid += fee
+
     def apply_intent(self, intent: TransactionIntent, fill_price: float) -> None:
         """Apply a filled intent at ``fill_price``."""
         asset = intent.asset
         self._last_prices[asset] = fill_price
 
         if intent.direction == Direction.EXIT:
+            pos = self.positions.get(asset)
+            if pos:
+                self._charge_fee(pos["size"] * fill_price)
             self._close_position(asset, fill_price)
             return
 
@@ -83,14 +104,16 @@ class VirtualPortfolio:
                 self._close_position(asset, fill_price)
 
         deploy = self.equity * intent.sizing_pct
-        notional = deploy * intent.leverage
+        leverage = intent.leverage or self.default_leverage
+        notional = deploy * leverage
         size = notional / fill_price if fill_price > 0 else 0.0
+        self._charge_fee(notional)
 
         self.positions[asset] = {
             "side": side,
             "size": size,
             "entry_price": fill_price,
-            "leverage": intent.leverage,
+            "leverage": leverage,
             "sizing_pct": intent.sizing_pct,
         }
         self._recompute_equity()
