@@ -38,6 +38,28 @@ Pure cryptocurrency research and trading engine — no equities, no yfinance/Alp
 - [x] Task-6: Programmatic Risk Guard and Veto Layer Enforcer
 - [x] Task-7: Structural Cleanup, Error Resilience, & Test Coverage Verification
 
+## Epic: Paper Trading & Adaptive Simulation (v0.3.x)
+
+Simulated trading is the primary product surface; LLM analysis feeds optional context.
+
+- [x] PAPER-1: Live price layer — `live_prices.py` (CryptoCompare → CoinGecko → Binance → placeholder)
+- [x] PAPER-2: `PaperTradingEngine` — portfolio tracking, signal refresh, trade history
+- [x] PAPER-3: `AdaptiveStrategyMonitor` — drawdown window, auto `optimize_strategies`, strategy switch
+- [x] PAPER-4: CLI — `tradingagents paper`, `backtest --paper`, post-analysis menu
+- [x] PAPER-5: TUI — Rich live portfolio table during paper session
+- [x] PAPER-6: Config — `TRADINGAGENTS_PAPER_*` env overrides in `default_config.py`
+- [x] PAPER-7: Tests — `test_live_prices`, `test_paper_engine`, `test_adaptive`
+
+### Paper Epic — Key Files
+- **Data:** `live_prices.py`, `cryptocompare.fetch_spot_price`, `coingecko.get_simple_price`
+- **Engine:** `simulator/paper_engine.py`, `simulator/adaptive.py`, `simulator/core.py`
+- **CLI:** `cli/paper_trading.py`, `cli/post_analysis.py`, `cli/main.py` (`paper`, `backtest --paper`)
+- **Config:** `.env.example` paper-trading section
+
+### Follow-up
+- [ ] PAPER-8: Persist paper session state to disk (resume across restarts)
+- [ ] PAPER-9: Web UI (Streamlit) for portfolio dashboard
+
 ## Active Task Logs
 
 ### Task-1: Core Path Unification & CLI Streaming Restructuring

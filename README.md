@@ -4,7 +4,7 @@
 
 <div align="center">
 
-[Overview](#overview) · [Installation](#installation) · [CLI](#cli) · [Backtesting](#backtesting) · [Python API](#python-api) · [Configuration](#configuration)
+[Overview](#overview) · [Installation](#installation) · [CLI](#cli) · [Backtesting](#backtesting) · [Paper Trading](#paper-trading-simulation) · [Python API](#python-api) · [Configuration](#configuration)
 
 </div>
 
@@ -29,7 +29,7 @@ TradingAgents mirrors a crypto trading desk: specialized LLM agents gather marke
 | **Trading** | Trader | Timing, direction, sizing from upstream reports |
 | **Risk** | Aggressive, Neutral, Conservative → Portfolio Manager | Risk debate; final approve/reject |
 
-Built on **LangGraph** with configurable analyst fan-out (`analyst_concurrency_limit`). After analysis, the CLI optionally runs a **pure-code backtest** (no LLM) and appends an optimization summary to the report.
+Built on **LangGraph** with configurable analyst fan-out (`analyst_concurrency_limit`). After analysis, the CLI/TUI offers **pure-code backtesting** (no LLM) and a **paper trading simulator** with live prices, portfolio tracking, and adaptive strategy switching.
 
 ### Crypto data vendors
 
@@ -76,7 +76,7 @@ python -m cli.main analyze               # run from source
 
 | Flag | Purpose |
 |------|---------|
-| `--no-backtest` | Skip post-analysis strategy optimization |
+| `--no-backtest` | Hide post-analysis backtest and paper-trade menu options |
 | `--checkpoint` | LangGraph checkpoint/resume after each node |
 | `--clear-checkpoints` | Delete saved checkpoints before run |
 
@@ -90,11 +90,19 @@ tradingagents analyze --clear-checkpoints
 
 ```bash
 tradingagents backtest --ticker BTC/USDT --date 2026-01-15
-tradingagents backtest -t ETH/USDT -d 2026-01-15
-tradingagents backtest --ticker BTC/USDT --live    # ccxt live price bridge
+tradingagents backtest -t ETH/USDT -d 2026-01-15 --paper   # backtest then paper sim
+tradingagents backtest --ticker BTC/USDT --live            # Binance ccxt fallback
 ```
 
-Omit `--date` for today. Interactive `analyze` prompts for pair, date, analysts, research depth, and LLM provider.
+**Standalone paper trading** (no LLM):
+
+```bash
+tradingagents paper --ticker BTC/USDT                    # backtest picks strategy, then sim
+tradingagents paper -t ETH/USDT --strategy rsi_mean_reversion --equity 5000
+tradingagents paper -t SOL/USDT --live --no-adaptive --ticks 20
+```
+
+Omit `--date` for today. Interactive `analyze` prompts for pair, date, analysts, research depth, and LLM provider. After analysis, the TUI menu offers backtest and paper simulation.
 
 ---
 
@@ -144,15 +152,66 @@ Decouples signal math from position tracking:
 
 | Mode | Mechanism |
 |------|-----------|
-| **Paper (default)** | `dummy_feed` — price steps from last historical bar |
-| **Live** | ccxt Binance ticker via `fetch_live_price` |
+| **Live vendors (default)** | CryptoCompare → CoinGecko → placeholder (`live_prices.py`) |
+| **Binance fallback** | ccxt when `LIVE_MODE=1` or `--live` |
+| **Placeholder** | `dummy_feed` drifts from last historical bar when APIs fail |
 
-Enable live mode:
+Set API keys in `.env` (`CRYPTOCOMPARE_API_KEY`, `COINGECKO_API_KEY`). Enable Binance fallback:
 
 ```bash
-tradingagents backtest --ticker BTC/USDT --date 2026-01-15 --live
 export LIVE_MODE=1
 export TRADINGAGENTS_LIVE_MODE=true
+```
+
+---
+
+## Paper trading simulation
+
+Simulated trading program — analysis is optional. No real orders are sent.
+
+### Architecture
+
+| Component | Role |
+|-----------|------|
+| **`PaperTradingEngine`** | Polls live prices, refreshes strategy signals, tracks equity |
+| **`VirtualPortfolio`** | Cash, positions, PnL, margin |
+| **`AdaptiveStrategyMonitor`** | Re-runs backtests when drawdown exceeds threshold for N minutes |
+| **`live_prices.py`** | CryptoCompare / CoinGecko / Binance / placeholder chain |
+
+### Enable in CLI / TUI
+
+1. **After analysis** — post-analysis menu → *Start Paper Trading Simulation*
+2. **Standalone** — `tradingagents paper --ticker BTC/USDT`
+3. **After backtest** — `tradingagents backtest --paper` or deploy prompt after optimization
+
+The TUI shows a live Rich table: equity, PnL, current strategy, signal, drawdown, and price source.
+
+### Adaptive strategy switching
+
+When `paper_adaptive_enabled` is on (default), sustained drawdown triggers `optimize_strategies()` on fresh data. If a better strategy is found, the simulator switches automatically.
+
+```bash
+# Re-backtest after 5% drawdown from peak for 30 minutes
+export TRADINGAGENTS_PAPER_LOSS_THRESHOLD_PCT=5.0
+export TRADINGAGENTS_PAPER_LOSS_REVIEW_MINUTES=30
+```
+
+### Python API
+
+```python
+from tradingagents.simulator import PaperTradingEngine, session_from_optimization
+from tradingagents.backtest import optimize_strategies, deploy_winning_strategy
+from tradingagents.default_config import DEFAULT_CONFIG
+
+config = DEFAULT_CONFIG.copy()
+config["paper_initial_equity"] = 10_000.0
+config["paper_adaptive_enabled"] = True
+
+opt = deploy_winning_strategy(optimize_strategies("BTC/USDT", "2026-06-12"), config)
+session = session_from_optimization(opt, config)
+engine = PaperTradingEngine(session, config)
+engine.run_loop(max_ticks=10)
+print(engine.get_state())
 ```
 
 ---
@@ -180,6 +239,7 @@ print(decision)
 
 ```python
 from tradingagents.backtest import (
+    compute_strategy_signal,
     optimize_strategies,
     deploy_winning_strategy,
     format_optimization_summary,
@@ -189,6 +249,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 result = optimize_strategies("BTC/USDT", "2026-01-15")
 result = deploy_winning_strategy(result, DEFAULT_CONFIG)
 print(format_optimization_summary(result))
+print(compute_strategy_signal("BTC/USDT", result.winner.strategy_name, result.winner.parameters, result.winner.lookback))
 ```
 
 See `tradingagents/default_config.py` for all options.
@@ -233,6 +294,10 @@ TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini
 TRADINGAGENTS_MAX_DEBATE_ROUNDS=2
 TRADINGAGENTS_CHECKPOINT_ENABLED=true
 TRADINGAGENTS_LIVE_MODE=false
+TRADINGAGENTS_PAPER_INITIAL_EQUITY=10000
+TRADINGAGENTS_PAPER_ADAPTIVE_ENABLED=true
+TRADINGAGENTS_PAPER_LOSS_REVIEW_MINUTES=60
+TRADINGAGENTS_PAPER_LOSS_THRESHOLD_PCT=5.0
 TRADINGAGENTS_TEMPERATURE=0.0
 TRADINGAGENTS_OUTPUT_LANGUAGE=English
 TRADINGAGENTS_BENCHMARK_TICKER=ETH/USDT
