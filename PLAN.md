@@ -65,12 +65,12 @@ Simulated trading is the primary product surface; LLM analysis feeds optional co
 Atomic commits per phase: `feat/P{n}-*: ...` — do not bundle phases.
 
 ### Phase 1 — Interactive UI & Multi-Strategy Backtest Harness (`feat/P1-*`)
-- [ ] P1-1: Update PLAN.md with full blueprint and task IDs
-- [ ] P1-2: Fix bare `tradingagents backtest` — validation, no silent empty exits
-- [ ] P1-3: Interactive prompts (questionary/rich) for ticker, date, horizons, equity, risk
-- [ ] P1-4: Post-analysis menu — `> Run Historical Optimization Backtest` selection loop
-- [ ] P1-5: Rich results table sorted by profit factor, max drawdown, net return; WINNER first
-- [ ] P1-6: Tests — `test_backtest_validation.py`, post-analysis table/menu updates
+- [x] P1-1: Update PLAN.md with full blueprint and task IDs
+- [x] P1-2: Fix bare `tradingagents backtest` — validation, no silent empty exits
+- [x] P1-3: Interactive prompts (questionary/rich) for ticker, date, horizons, equity, risk
+- [x] P1-4: Post-analysis menu — `> Run Historical Optimization Backtest` selection loop
+- [x] P1-5: Rich results table sorted by profit factor, max drawdown, net return; WINNER first
+- [x] P1-6: Tests — `test_backtest_validation.py`, post-analysis table/menu updates
 
 ### Phase 2 — Live Market Feed Integration (`feat/P2-*`)
 - [ ] P2-1: Unified router `tradingagents/dataflows/live_feed.py` (wrap/refactor `live_prices.py`)
