@@ -97,6 +97,12 @@ class PaperTradingEngine:
                 self.config.get("paper_loss_review_minutes", 60),
             )
         )
+        max_lookback = float(
+            self.config.get(
+                "drawdown_max_lookback_minutes",
+                review_minutes,
+            )
+        )
         threshold_pct = float(
             self.config.get(
                 "max_allowed_drawdown_pct",
@@ -106,6 +112,7 @@ class PaperTradingEngine:
         self._adaptive = AdaptiveStrategyMonitor(
             loss_review_minutes=review_minutes,
             loss_threshold_pct=threshold_pct,
+            max_lookback_minutes=max_lookback,
             initial_equity=self.portfolio.initial_equity,
         )
         if self._pending_last_drawdown_review_at is not None:

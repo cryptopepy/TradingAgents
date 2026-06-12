@@ -44,6 +44,14 @@ _LOOKBACK_GRANULARITY = {
     "7d": _GRANULARITY_1H,
 }
 
+# Default OHLCV disk-cache TTL when BACKTEST_CACHE_TTL_SECONDS is unset.
+_DEFAULT_CACHE_TTL_BY_GRANULARITY: dict[int, int] = {
+    _GRANULARITY_5M: 600,   # 10 min for 5m bars (8h window)
+    _GRANULARITY_15M: 900,  # 15 min for 15m bars (24h window)
+    _GRANULARITY_1H: 3600,  # 1 h for hourly bars (7d window)
+}
+_HISTORIC_CACHE_TTL_SECONDS = 86400  # past (non-today) windows — data is stable
+
 _CRYPTO_PERIODS_PER_YEAR = 365 * 24  # hourly annualization baseline
 
 
@@ -156,6 +164,48 @@ def _cache_path(ticker: str, granularity: int, start: str, end: str) -> Path:
     return cache_dir / f"{safe}-g{granularity}-{start}-{end}.csv"
 
 
+def _cache_ttl_seconds(
+    granularity: int,
+    *,
+    capped: bool,
+    config: dict | None = None,
+) -> int:
+    """TTL for historic_crypto CSV cache; shorter when the end date is capped to today."""
+    cfg = config or get_config()
+    override = os.environ.get("BACKTEST_CACHE_TTL_SECONDS")
+    if override is None or str(override).strip() == "":
+        override = cfg.get("backtest_cache_ttl_seconds")
+    if override is not None and str(override).strip() != "" and int(override) > 0:
+        return int(override)
+    if not capped:
+        return _HISTORIC_CACHE_TTL_SECONDS
+    return _DEFAULT_CACHE_TTL_BY_GRANULARITY.get(granularity, 600)
+
+
+def _cache_is_fresh(
+    cache_file: Path,
+    ttl_seconds: int,
+    *,
+    capped: bool,
+    end_dt: datetime,
+    now: datetime | None = None,
+) -> bool:
+    """True when a cached CSV is within TTL and safe to reuse for the requested window."""
+    if not cache_file.exists():
+        return False
+    now_utc = _utc_now_naive(now=now)
+    mtime = datetime.fromtimestamp(cache_file.stat().st_mtime, tz=timezone.utc).replace(
+        tzinfo=None
+    )
+    if capped and mtime.date() < now_utc.date():
+        # End-of-day cap and last-closed-bar floor change at midnight.
+        return False
+    if capped and end_dt.date() == now_utc.date() and mtime.date() < end_dt.date():
+        return False
+    age = time.time() - cache_file.stat().st_mtime
+    return age <= ttl_seconds
+
+
 def _normalize_historic_df(raw: pd.DataFrame) -> pd.DataFrame:
     """Standardize Historic-Crypto output to OHLCV with Date column."""
     if raw is None or raw.empty:
@@ -236,16 +286,33 @@ def fetch_historical_crypto(
     end_str = _format_historic_date(end_dt)
     cache_file = _cache_path(ticker, granularity, start_str, end_str)
 
-    if not force_refresh and cache_file.exists():
+    cfg = config or get_config()
+    ttl_seconds = _cache_ttl_seconds(granularity, capped=capped, config=cfg)
+
+    if not force_refresh and _cache_is_fresh(
+        cache_file, ttl_seconds, capped=capped, end_dt=end_dt, now=now
+    ):
         cached = _normalize_historic_df(pd.read_csv(cache_file))
         if _cache_covers_range(cached, start_dt, end_dt):
+            logger.debug(
+                "Backtest OHLCV cache hit for %s (%s → %s, ttl=%ds)",
+                ticker,
+                start_str,
+                end_str,
+                ttl_seconds,
+            )
             mask = (cached["Date"] >= pd.Timestamp(start_dt)) & (
                 cached["Date"] <= pd.Timestamp(end_dt)
             )
             return cached.loc[mask].reset_index(drop=True)
         logger.info("Cache incomplete for %s — refetching", cache_file.name)
-
-    cfg = config or get_config()
+    elif not force_refresh and cache_file.exists():
+        logger.debug(
+            "Backtest OHLCV cache stale for %s (ttl=%ds, capped=%s) — refetching",
+            cache_file.name,
+            ttl_seconds,
+            capped,
+        )
     df = fetch_intraday_ohlcv(
         symbol,
         start_dt,

@@ -33,7 +33,7 @@ class TestAdaptiveStrategyMonitor:
         assert monitor.should_rebacktest(start + timedelta(minutes=20)) is False
         assert monitor.should_rebacktest(start + timedelta(minutes=35)) is True
 
-    def test_effective_window_uses_max_of_configured_and_since_last_review(self):
+    def test_effective_window_capped_at_configured_max(self):
         monitor = AdaptiveStrategyMonitor(loss_review_minutes=60, initial_equity=10_000.0)
         now = datetime(2026, 6, 12, 14, 0, tzinfo=timezone.utc)
 
@@ -43,9 +43,19 @@ class TestAdaptiveStrategyMonitor:
         assert monitor.effective_review_window_minutes(now) == 60.0
 
         monitor.note_drawdown_review(now - timedelta(minutes=90))
-        assert monitor.effective_review_window_minutes(now) == 90.0
+        assert monitor.effective_review_window_minutes(now) == 60.0
 
-    def test_should_rebacktest_uses_effective_window(self):
+    def test_effective_window_respects_explicit_max_lookback(self):
+        monitor = AdaptiveStrategyMonitor(
+            loss_review_minutes=60,
+            max_lookback_minutes=45,
+            initial_equity=10_000.0,
+        )
+        now = datetime(2026, 6, 12, 14, 0, tzinfo=timezone.utc)
+        monitor.note_drawdown_review(now - timedelta(minutes=90))
+        assert monitor.effective_review_window_minutes(now) == 45.0
+
+    def test_should_rebacktest_uses_capped_window(self):
         monitor = AdaptiveStrategyMonitor(
             loss_review_minutes=60,
             loss_threshold_pct=5.0,
@@ -56,8 +66,8 @@ class TestAdaptiveStrategyMonitor:
         monitor.record_equity(10_000.0, start)
         monitor.record_equity(9_400.0, start + timedelta(minutes=5))
 
-        assert monitor.should_rebacktest(start + timedelta(minutes=90)) is False
-        assert monitor.should_rebacktest(start + timedelta(minutes=100)) is True
+        assert monitor.should_rebacktest(start + timedelta(minutes=60)) is False
+        assert monitor.should_rebacktest(start + timedelta(minutes=65)) is True
 
     def test_format_last_drawdown_review(self):
         assert format_last_drawdown_review(None) == "Never"

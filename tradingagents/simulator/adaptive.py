@@ -26,6 +26,7 @@ class AdaptiveStrategyMonitor:
 
     loss_review_minutes: float = 60.0
     loss_threshold_pct: float = 5.0
+    max_lookback_minutes: float = 0.0
     initial_equity: float = 10_000.0
     _peak_equity: float = field(init=False)
     _losing_since: Optional[datetime] = field(default=None, init=False)
@@ -56,12 +57,18 @@ class AdaptiveStrategyMonitor:
         ts = now or datetime.now(timezone.utc)
         return (ts - self._last_drawdown_review_at).total_seconds() / 60.0
 
+    def _lookback_cap_minutes(self) -> float:
+        if self.max_lookback_minutes > 0:
+            return self.max_lookback_minutes
+        return self.loss_review_minutes
+
     def effective_review_window_minutes(self, now: Optional[datetime] = None) -> float:
-        """Configured window extended by time since the last drawdown review."""
+        """Drawdown review window, never exceeding the configured lookback cap."""
+        cap = self._lookback_cap_minutes()
         since = self.minutes_since_last_drawdown_review(now)
         if since is None:
-            return self.loss_review_minutes
-        return max(self.loss_review_minutes, since)
+            return min(self.loss_review_minutes, cap)
+        return min(max(self.loss_review_minutes, since), cap)
 
     def note_drawdown_review(self, timestamp: Optional[datetime] = None) -> None:
         """Record that a drawdown review cycle ran at ``timestamp``."""

@@ -1,5 +1,7 @@
 """Regression tests for backtest OHLCV fetch and silent-exit prevention."""
 
+import os
+import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -15,9 +17,13 @@ from tradingagents.backtest import (
     require_optimization_results,
 )
 from tradingagents.backtest.engine import (
+    _cache_is_fresh,
+    _cache_path,
+    _cache_ttl_seconds,
     _last_closed_bar_dt,
     fetch_historical_crypto,
 )
+from tradingagents.dataflows.config import set_config
 from tradingagents.backtest.historical_data import fetch_intraday_ohlcv
 from tradingagents.backtest.schemas import OptimizationResult
 
@@ -221,3 +227,106 @@ class TestBacktestHistoricalData:
         )
         with pytest.raises(BacktestValidationError, match="no strategy metrics"):
             require_optimization_results(empty)
+
+
+@pytest.mark.unit
+class TestBacktestOhlcvCache:
+    def _window_df(self, end_date: str, lookback: LookbackWindow, now: datetime) -> pd.DataFrame:
+        end_dt, capped = __import__(
+            "tradingagents.backtest.engine", fromlist=["_resolve_backtest_end_dt"]
+        )._resolve_backtest_end_dt(end_date, now=now)
+        if capped:
+            end_dt = _last_closed_bar_dt(end_dt, lookback.granularity_seconds())
+        start_dt = end_dt - lookback.to_timedelta()
+        rows = max(30, int((end_dt - start_dt).total_seconds() / lookback.granularity_seconds()) + 2)
+        dates = pd.date_range(start_dt, periods=rows, freq=f"{lookback.granularity_seconds()}s")
+        close = pd.Series(range(100, 100 + rows), dtype=float)
+        return pd.DataFrame(
+            {
+                "Date": dates,
+                "Open": close,
+                "High": close + 1,
+                "Low": close - 1,
+                "Close": close,
+                "Volume": 1_000,
+            }
+        )
+
+    def test_cache_hit_skips_vendor_fetch(self, tmp_path):
+        noon = datetime(2026, 6, 12, 12, 0, 0)
+        df = self._window_df("2026-06-05", LookbackWindow.H8, noon)
+        set_config({"data_cache_dir": str(tmp_path)})
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            first = fetch_historical_crypto(
+                "BTC/USDT", "2026-06-05", LookbackWindow.H8, now=noon
+            )
+            second = fetch_historical_crypto(
+                "BTC/USDT", "2026-06-05", LookbackWindow.H8, now=noon
+            )
+
+        assert len(first) > 0
+        assert len(second) > 0
+        mock_fetch.assert_called_once()
+
+    def test_cache_miss_after_ttl_expires(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BACKTEST_CACHE_TTL_SECONDS", raising=False)
+        noon = datetime(2026, 6, 12, 12, 0, 0)
+        df = self._window_df("2026-06-12", LookbackWindow.H8, noon)
+        set_config({"data_cache_dir": str(tmp_path), "backtest_cache_ttl_seconds": 60})
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            fetch_historical_crypto("BTC/USDT", "2026-06-12", LookbackWindow.H8, now=noon)
+            ticker = "BTC-USD"
+            end_dt = _last_closed_bar_dt(noon, LookbackWindow.H8.granularity_seconds())
+            start_dt = end_dt - LookbackWindow.H8.to_timedelta()
+            cache_file = _cache_path(
+                ticker,
+                LookbackWindow.H8.granularity_seconds(),
+                start_dt.strftime("%Y-%m-%d-%H-%M"),
+                end_dt.strftime("%Y-%m-%d-%H-%M"),
+            )
+            stale_mtime = time.time() - 120
+            os.utime(cache_file, (stale_mtime, stale_mtime))
+            fetch_historical_crypto("BTC/USDT", "2026-06-12", LookbackWindow.H8, now=noon)
+
+        assert mock_fetch.call_count == 2
+
+    def test_cache_miss_across_day_boundary_for_today(self, tmp_path):
+        yesterday = datetime(2026, 6, 11, 23, 30, 0)
+        today = datetime(2026, 6, 12, 12, 0, 0)
+        df = self._window_df("2026-06-12", LookbackWindow.H8, today)
+        set_config({"data_cache_dir": str(tmp_path)})
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            fetch_historical_crypto("BTC/USDT", "2026-06-12", LookbackWindow.H8, now=yesterday)
+            fetch_historical_crypto("BTC/USDT", "2026-06-12", LookbackWindow.H8, now=today)
+
+        assert mock_fetch.call_count == 2
+
+    def test_cache_ttl_defaults_by_granularity(self, monkeypatch):
+        monkeypatch.delenv("BACKTEST_CACHE_TTL_SECONDS", raising=False)
+        set_config({"backtest_cache_ttl_seconds": 0})
+        assert _cache_ttl_seconds(300, capped=True) == 600
+        assert _cache_ttl_seconds(900, capped=True) == 900
+        assert _cache_ttl_seconds(3600, capped=True) == 3600
+        assert _cache_ttl_seconds(300, capped=False) == 86400
+
+    def test_cache_is_fresh_respects_ttl(self, tmp_path):
+        cache_file = tmp_path / "sample.csv"
+        cache_file.write_text("Date,Close\n", encoding="utf-8")
+        end_dt = datetime(2026, 6, 12, 12, 0, 0)
+        now = datetime(2026, 6, 12, 12, 1, 0)
+        assert _cache_is_fresh(cache_file, 600, capped=True, end_dt=end_dt, now=now) is True
+        stale_mtime = time.time() - 700
+        os.utime(cache_file, (stale_mtime, stale_mtime))
+        assert _cache_is_fresh(cache_file, 600, capped=True, end_dt=end_dt, now=now) is False
