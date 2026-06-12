@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from tradingagents.agents.utils.rating import parse_rating
-from tradingagents.dataflows.stockstats_utils import StockstatsUtils
+from tradingagents.dataflows.crypto_candles import CryptoIndicatorUtils
 
 
 @dataclass
@@ -53,7 +53,7 @@ def _parse_stop_and_entry(trader_plan: str) -> tuple[Optional[float], Optional[f
 
 def _fetch_atr(symbol: str, trade_date: str) -> Optional[float]:
     try:
-        raw = StockstatsUtils.get_stock_stats(symbol, "atr", trade_date)
+        raw = CryptoIndicatorUtils.get_indicator(symbol, "atr", trade_date)
         if isinstance(raw, (int, float)):
             return float(raw)
         if isinstance(raw, str) and raw.replace(".", "", 1).isdigit():

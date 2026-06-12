@@ -7,7 +7,7 @@ from tradingagents.risk.guard import apply_risk_guard, create_risk_guard_node
 
 def _state(trader_plan: str, final: str = "**Rating**: Buy\n\nBuy."):
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": "BTC/USDT",
         "trade_date": "2026-01-10",
         "trader_investment_plan": trader_plan,
         "final_trade_decision": final,

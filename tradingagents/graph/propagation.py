@@ -19,7 +19,7 @@ class Propagator:
         self,
         company_name: str,
         trade_date: str,
-        asset_type: str = "stock",
+        asset_type: str = "crypto",
         past_context: str = "",
         instrument_context: str = "",
     ) -> Dict[str, Any]:

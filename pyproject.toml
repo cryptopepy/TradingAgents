@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tradingagents"
-version = "0.2.5"
-description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
+version = "0.3.0"
+description = "TradingAgents: Multi-Agents LLM Crypto Research & Trading Framework"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -27,7 +27,6 @@ dependencies = [
     "stockstats>=0.6.5",
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
-    "yfinance>=1.4.1",
 ]
 
 [project.scripts]

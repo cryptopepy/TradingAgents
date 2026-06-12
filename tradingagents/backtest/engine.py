@@ -13,7 +13,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from tradingagents.dataflows.stockstats_utils import load_ohlcv
+from tradingagents.dataflows.crypto_candles import load_ohlcv
 
 
 class LookbackWindow(str, Enum):

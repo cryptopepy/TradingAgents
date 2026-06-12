@@ -96,41 +96,27 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Search queries used by get_global_news for macro headlines. Extend or
     # replace to broaden geographic / sector coverage.
     "global_news_queries": [
-        "Federal Reserve interest rates inflation",
-        "S&P 500 earnings GDP economic outlook",
-        "geopolitical risk trade war sanctions",
-        "ECB Bank of England BOJ central bank policy",
-        "oil commodities supply chain energy",
+        "bitcoin ETF flows regulation SEC",
+        "ethereum L2 DeFi protocol upgrades",
+        "crypto macro Fed liquidity stablecoin",
+        "altcoin season market structure dominance",
+        "exchange hack exploit security incident",
     ],
-    # Data vendor configuration
-    # Category-level configuration (default for all tools in category)
+    # Crypto data vendor configuration (category defaults; tool_vendors overrides per tool)
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_crypto_apis": "binance,cryptocompare",
+        "technical_indicators": "binance",
+        "fundamental_data": "coingecko",
+        "news_data": "cryptocompare,lunarcrush",
     },
-    # Tool-level configuration (takes precedence over category-level)
-    "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
-    },
-    # Benchmark for alpha calculation in the reflection layer.
-    # ``benchmark_ticker`` (when set) overrides the suffix map for all
-    # tickers; leave it None to use ``benchmark_map`` for auto-detection
-    # based on the ticker's exchange suffix. SPY remains the US default
-    # so the reflection label keeps reading "Alpha vs SPY" for US tickers
-    # while non-US tickers get their regional index automatically.
+    "tool_vendors": {},
+    # Benchmark for alpha calculation in the reflection layer (crypto pairs).
+    # ``benchmark_ticker`` overrides auto-detection when set.
     "benchmark_ticker": None,
     "benchmark_map": {
-        ".NS":  "^NSEI",       # NSE India (Nifty 50)
-        ".BO":  "^BSESN",      # BSE India (Sensex)
-        ".T":   "^N225",       # Tokyo (Nikkei 225)
-        ".HK":  "^HSI",        # Hong Kong (Hang Seng)
-        ".L":   "^FTSE",       # London (FTSE 100)
-        ".TO":  "^GSPTSE",     # Toronto (TSX Composite)
-        ".AX":  "^AXJO",       # Australia (ASX 200)
-        ".SS":  "000001.SS",   # Shanghai (SSE Composite)
-        ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
-        "":     "SPY",         # default for US-listed tickers (no suffix)
+        "BTC": "ETH/USDT",
+        "ETH": "BTC/USDT",
+        "SOL": "BTC/USDT",
+        "": "BTC/USDT",
     },
 })

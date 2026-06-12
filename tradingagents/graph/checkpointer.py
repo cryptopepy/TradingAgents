@@ -13,13 +13,13 @@ from typing import Generator
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from tradingagents.dataflows.symbol_utils import safe_path_key
 from tradingagents.dataflows.utils import safe_ticker_component
 
 
 def _db_path(data_dir: str | Path, ticker: str) -> Path:
     """Return the SQLite checkpoint DB path for a ticker."""
-    # Reject ticker values that would escape the checkpoints directory.
-    safe = safe_ticker_component(ticker).upper()
+    safe = safe_ticker_component(safe_path_key(ticker)).upper()
     p = Path(data_dir) / "checkpoints"
     p.mkdir(parents=True, exist_ok=True)
     return p / f"{safe}.db"

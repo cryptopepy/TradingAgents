@@ -1,4 +1,4 @@
-"""Tests for symbol normalization and the no-data routing sentinel."""
+"""Tests for crypto pair normalization and no-data routing."""
 
 import unittest
 
@@ -7,75 +7,52 @@ import pytest
 from tradingagents.dataflows.symbol_utils import (
     NoMarketDataError,
     normalize_symbol,
-    is_yahoo_safe,
+    parse_crypto_pair,
+    is_valid_crypto_pair,
+    is_cache_safe,
 )
 
 
 @pytest.mark.unit
-class TestNormalizeSymbol(unittest.TestCase):
-    def test_plain_equities_unchanged(self):
-        for sym in ("AAPL", "MSFT", "TSM", "BRK.B", "0700.HK", "^GSPC", "GC=F"):
-            self.assertEqual(normalize_symbol(sym), sym)
+class TestParseCryptoPair(unittest.TestCase):
+    def test_slash_format(self):
+        pair = parse_crypto_pair("BTC/USDT")
+        self.assertEqual(pair.base, "BTC")
+        self.assertEqual(pair.quote, "USDT")
+        self.assertEqual(pair.display, "BTC/USDT")
+        self.assertEqual(pair.binance_symbol, "BTCUSDT")
 
-    def test_lowercases_are_upper(self):
-        self.assertEqual(normalize_symbol("aapl"), "AAPL")
-        self.assertEqual(normalize_symbol("  msft  "), "MSFT")
+    def test_dash_format(self):
+        self.assertEqual(normalize_symbol("eth-usdc"), "ETH/USDC")
 
-    def test_metal_aliases_map_to_futures(self):
-        self.assertEqual(normalize_symbol("XAUUSD"), "GC=F")
-        self.assertEqual(normalize_symbol("XAUUSD+"), "GC=F")   # broker CFD suffix
-        self.assertEqual(normalize_symbol("xauusd+"), "GC=F")
-        self.assertEqual(normalize_symbol("GOLD"), "GC=F")
-        self.assertEqual(normalize_symbol("XAGUSD"), "SI=F")
+    def test_concatenated_format(self):
+        self.assertEqual(normalize_symbol("BTCUSDT"), "BTC/USDT")
 
-    def test_energy_and_index_aliases(self):
-        self.assertEqual(normalize_symbol("USOIL"), "CL=F")
-        self.assertEqual(normalize_symbol("SPX500"), "^GSPC")
-        self.assertEqual(normalize_symbol("NAS100"), "^NDX")
-        self.assertEqual(normalize_symbol("US30"), "^DJI")
+    def test_usd_maps_to_usdt_for_binance(self):
+        pair = parse_crypto_pair("SOL/USD")
+        self.assertEqual(pair.binance_symbol, "SOLUSDT")
 
-    def test_forex_pairs_get_x_suffix(self):
-        self.assertEqual(normalize_symbol("EURUSD"), "EURUSD=X")
-        self.assertEqual(normalize_symbol("GBPJPY"), "GBPJPY=X")
-        self.assertEqual(normalize_symbol("eurusd"), "EURUSD=X")
+    def test_invalid_pair_raises(self):
+        with self.assertRaises(ValueError):
+            parse_crypto_pair("NOTAPAIR")
 
-    def test_crypto_pairs_get_dash_usd(self):
-        self.assertEqual(normalize_symbol("BTCUSD"), "BTC-USD")
-        self.assertEqual(normalize_symbol("ETHUSD"), "ETH-USD")
-
-    def test_six_letter_non_currency_left_alone(self):
-        # GOOGLE-style 6-letter tickers that aren't two currency codes
-        # must not be mangled into a fake forex pair.
-        self.assertEqual(normalize_symbol("ABCDEF"), "ABCDEF")
-
-    def test_empty_input_passthrough(self):
-        self.assertEqual(normalize_symbol(""), "")
+    def test_is_valid_crypto_pair(self):
+        self.assertTrue(is_valid_crypto_pair("BTC/USDT"))
+        self.assertFalse(is_valid_crypto_pair("AAPL"))
 
 
 @pytest.mark.unit
 class TestNoMarketDataError(unittest.TestCase):
     def test_message_includes_resolution(self):
-        err = NoMarketDataError("XAUUSD+", "GC=F", "no rows")
-        self.assertIn("XAUUSD+", str(err))
-        self.assertIn("GC=F", str(err))
-        self.assertEqual(err.symbol, "XAUUSD+")
-        self.assertEqual(err.canonical, "GC=F")
-
-    def test_canonical_defaults_to_symbol(self):
-        err = NoMarketDataError("FOOBAR")
-        self.assertEqual(err.canonical, "FOOBAR")
+        err = NoMarketDataError("FOO/BAR", "FOO/BAR", "no rows")
+        self.assertIn("FOO", str(err))
+        self.assertEqual(err.symbol, "FOO/BAR")
 
 
 @pytest.mark.unit
-class TestIsYahooSafe(unittest.TestCase):
-    def test_accepts_structural_chars(self):
-        for sym in ("AAPL", "GC=F", "^GSPC", "BRK.B", "BTC-USD"):
-            self.assertTrue(is_yahoo_safe(sym))
+class TestIsCacheSafe(unittest.TestCase):
+    def test_accepts_alphanumeric(self):
+        self.assertTrue(is_cache_safe("BTCUSDT"))
 
-    def test_rejects_slash_and_space(self):
-        for sym in ("a/b", "AA PL", ""):
-            self.assertFalse(is_yahoo_safe(sym))
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_rejects_slash(self):
+        self.assertFalse(is_cache_safe("BTC/USDT"))

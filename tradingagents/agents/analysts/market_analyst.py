@@ -3,10 +3,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_indicators,
     get_language_instruction,
-    get_stock_data,
+    get_crypto_ohlcv,
     get_verified_market_snapshot,
+    get_perps_data,
 )
-from tradingagents.dataflows.config import get_config
 
 
 def create_market_analyst(llm):
@@ -16,42 +16,36 @@ def create_market_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         tools = [
-            get_stock_data,
+            get_crypto_ohlcv,
             get_indicators,
+            get_perps_data,
             get_verified_market_snapshot,
         ]
 
         system_message = (
-            """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
+            """You are a crypto market analyst covering 24/7 perpetual and spot markets.
 
-Moving Averages:
-- close_50_sma: 50 SMA: A medium-term trend indicator. Usage: Identify trend direction and serve as dynamic support/resistance. Tips: It lags price; combine with faster indicators for timely signals.
-- close_200_sma: 200 SMA: A long-term trend benchmark. Usage: Confirm overall market trend and identify golden/death cross setups. Tips: It reacts slowly; best for strategic trend confirmation rather than frequent trading entries.
-- close_10_ema: 10 EMA: A responsive short-term average. Usage: Capture quick shifts in momentum and potential entry points. Tips: Prone to noise in choppy markets; use alongside longer averages for filtering false signals.
+Your focus areas:
+- **Perpetuals**: funding rates, open interest, basis vs spot (use get_perps_data)
+- **Technicals**: RSI, MACD, Bollinger, ATR on crypto OHLCV (use get_crypto_ohlcv then get_indicators)
+- **Market structure**: liquidity regimes, volatility clusters, weekend vs weekday behavior
+- **Derivatives context**: when funding is extreme, flag potential squeeze/reset risk
 
-MACD Related:
-- macd: MACD: Computes momentum via differences of EMAs. Usage: Look for crossovers and divergence as signals of trend changes. Tips: Confirm with other indicators in low-volatility or sideways markets.
-- macds: MACD Signal: An EMA smoothing of the MACD line. Usage: Use crossovers with the MACD line to trigger trades. Tips: Should be part of a broader strategy to avoid false positives.
-- macdh: MACD Histogram: Shows the gap between the MACD line and its signal. Usage: Visualize momentum strength and spot divergence early. Tips: Can be volatile; complement with additional filters in fast-moving markets.
+Available indicators (call get_indicators once per name):
+- close_50_sma, close_200_sma, close_10_ema — trend
+- macd, macds, macdh — momentum
+- rsi — overbought/oversold (70/30; can stay extreme in trends)
+- boll, boll_ub, boll_lb, atr — volatility bands and stop placement
+- vwma — volume-weighted trend confirmation
 
-Momentum Indicators:
-- rsi: RSI: Measures momentum to flag overbought/oversold conditions. Usage: Apply 70/30 thresholds and watch for divergence to signal reversals. Tips: In strong trends, RSI may remain extreme; always cross-check with trend analysis.
+Workflow: call get_crypto_ohlcv first, then get_indicators for up to 8 complementary indicators.
+Call get_perps_data for funding/OI. Call get_verified_market_snapshot before final numeric claims.
 
-Volatility Indicators:
-- boll: Bollinger Middle: A 20 SMA serving as the basis for Bollinger Bands. Usage: Acts as a dynamic benchmark for price movement. Tips: Combine with the upper and lower bands to effectively spot breakouts or reversals.
-- boll_ub: Bollinger Upper Band: Typically 2 standard deviations above the middle line. Usage: Signals potential overbought conditions and breakout zones. Tips: Confirm signals with other tools; prices may ride the band in strong trends.
-- boll_lb: Bollinger Lower Band: Typically 2 standard deviations below the middle line. Usage: Indicates potential oversold conditions. Tips: Use additional analysis to avoid false reversal signals.
-- atr: ATR: Averages true range to measure volatility. Usage: Set stop-loss levels and adjust position sizes based on current market volatility. Tips: It's a reactive measure, so use it as part of a broader risk management strategy.
+Crypto trades continuously — do not cite market holidays or session gaps. Flag when order-book depth
+or liquidation data is unavailable rather than inventing figures.
 
-Volume-Based Indicators:
-- vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
-
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
-
-Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
-
-Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+Write a detailed report with actionable levels and risk notes."""
+            + """ Append a Markdown summary table at the end."""
             + get_language_instruction()
         )
 
@@ -78,11 +72,9 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
         prompt = prompt.partial(instrument_context=instrument_context)
 
         chain = prompt | llm.bind_tools(tools)
-
         result = chain.invoke(state["messages"])
 
         report = ""
-
         if len(result.tool_calls) == 0:
             report = result.content
 

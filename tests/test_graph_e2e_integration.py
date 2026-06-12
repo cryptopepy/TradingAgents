@@ -12,7 +12,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
-def _minimal_final_state(ticker: str = "NVDA", trade_date: str = "2026-01-10") -> dict:
+def _minimal_final_state(ticker: str = "BTC/USDT", trade_date: str = "2026-01-10") -> dict:
     return {
         "final_trade_decision": "**Rating**: Hold\n\n**Executive Summary**: Wait.\n\n**Investment Thesis**: Balanced.",
         "company_of_interest": ticker,
@@ -44,7 +44,7 @@ def _minimal_final_state(ticker: str = "NVDA", trade_date: str = "2026-01-10") -
             "latest_speaker": "Neutral",
         },
         "messages": [],
-        "past_context": "Prior NVDA lesson.",
+        "past_context": "Prior BTC/USDT lesson.",
     }
 
 
@@ -77,7 +77,7 @@ class TestPropagateUnifiedPath:
 
         with patch.object(graph.graph, "stream", side_effect=fake_stream):
             state, signal = graph.propagate(
-                "NVDA",
+                "BTC/USDT",
                 "2026-01-10",
                 stream_callback=on_chunk,
                 callbacks=[MagicMock()],
@@ -89,14 +89,14 @@ class TestPropagateUnifiedPath:
 
         entries = graph.memory_log.load_entries()
         assert len(entries) == 1
-        assert entries[0]["ticker"] == "NVDA"
+        assert entries[0]["ticker"] == "BTC/USDT"
         assert entries[0]["pending"] is True
 
-        log_dir = Path(config["results_dir"]) / "NVDA" / "TradingAgentsStrategy_logs"
+        log_dir = Path(config["results_dir"]) / "BTCUSDT" / "TradingAgentsStrategy_logs"
         log_file = log_dir / "full_states_log_2026-01-10.json"
         assert log_file.exists()
         payload = json.loads(log_file.read_text(encoding="utf-8"))
-        assert payload["company_of_interest"] == "NVDA"
+        assert payload["company_of_interest"] == "BTC/USDT"
         assert payload["market_report"] == "Market ok."
 
     def test_graph_has_parallel_join_and_risk_guard(self, mock_llm_client):

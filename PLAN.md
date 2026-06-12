@@ -1,9 +1,22 @@
 # TradingAgents Optimization Manifest
 
 ## System State
-- Current Version: 0.2.5
+- Current Version: 0.3.0
 - Global Concurrency Strategy: Parallel Fan-Out
-- Last Active Task: Task-6
+- Last Active Task: Crypto-Only Framework Transition
+
+## High-Priority Epic: Crypto-Only Framework Transition
+
+Pure cryptocurrency research and trading engine — no equities, no yfinance/Alpha Vantage stock paths.
+
+- [ ] CRYPTO-1: Crypto data vendor layer (CoinGecko, Binance, CryptoCompare fallback via `route_to_vendor`)
+- [ ] CRYPTO-2: Symbol normalization for crypto pairs (`BTC/USDT`, `ETH/USDC`, `SOL/USD`)
+- [ ] CRYPTO-3: State & CLI — `asset_type` defaults to `crypto`, remove stock/crypto mode selection
+- [ ] CRYPTO-4: Analyst prompts & tools — perps/funding/OI, on-chain fundamentals, crypto sentiment/news
+- [ ] CRYPTO-5: Backtest engine — 24/7/365 continuous tracking, no market-hours gaps
+- [ ] CRYPTO-6: Tests — replace AAPL/NVDA/SPY fixtures with BTC/ETH/SOL pairs; pytest green
+- [ ] CRYPTO-7: Dependencies — remove yfinance; keep stockstats for indicator math on crypto OHLCV
+- [ ] CRYPTO-8: Graph, risk guard, benchmark — BTC vs ETH baseline; end-to-end crypto symbols
 
 ## Implementation Checklist
 - [x] Task-1: Core Path Unification & CLI Streaming Restructuring

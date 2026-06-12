@@ -5,14 +5,11 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_news,
 )
-from tradingagents.dataflows.config import get_config
 
 
 def create_news_analyst(llm):
     def news_analyst_node(state):
         current_date = state["trade_date"]
-        asset_type = state.get("asset_type", "stock")
-        asset_label = "company" if asset_type == "stock" else "asset"
         instrument_context = get_instrument_context_from_state(state)
 
         tools = [
@@ -21,8 +18,12 @@ def create_news_analyst(llm):
         ]
 
         system_message = (
-            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(query, start_date, end_date) for {asset_label}-specific or targeted news searches, and get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            "You are a crypto news researcher. Cover protocol upgrades, regulatory headlines, "
+            "ETF flows, exchange events, hacks/exploits, and macro drivers (rates, USD liquidity) "
+            "relevant to the target pair. Use get_news for pair-specific headlines and "
+            "get_global_news for macro crypto context. No equity earnings or Fed minutes framing "
+            "unless directly impacting crypto."
+            + " Append a Markdown summary table at the end."
             + get_language_instruction()
         )
 
@@ -52,7 +53,6 @@ def create_news_analyst(llm):
         result = chain.invoke(state["messages"])
 
         report = ""
-
         if len(result.tool_calls) == 0:
             report = result.content
 

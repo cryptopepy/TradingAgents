@@ -45,7 +45,7 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # Default subreddits ordered roughly by signal density for ticker-specific
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
-DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+DEFAULT_SUBREDDITS = ("CryptoCurrency", "Bitcoin", "ethereum")
 
 
 def _search_qs(ticker: str, limit: int) -> str:

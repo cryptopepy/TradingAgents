@@ -7,8 +7,6 @@ import json
 from datetime import datetime, timedelta
 from typing import Callable, Dict, Any, Tuple, List, Optional
 
-import yfinance as yf
-
 logger = logging.getLogger(__name__)
 
 from langgraph.prebuilt import ToolNode
@@ -30,16 +28,18 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     resolve_instrument_identity,
-    get_stock_data,
+    get_crypto_ohlcv,
     get_indicators,
     get_fundamentals,
-    get_balance_sheet,
-    get_cashflow,
-    get_income_statement,
+    get_onchain_metrics,
+    get_tokenomics,
     get_news,
-    get_insider_transactions,
-    get_global_news
+    get_global_news,
+    get_sentiment,
+    get_perps_data,
 )
+from tradingagents.dataflows.crypto_candles import load_ohlcv
+from tradingagents.dataflows.symbol_utils import parse_crypto_pair, safe_path_key
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -176,88 +176,73 @@ class TradingAgentsGraph:
         return {
             "market": ToolNode(
                 [
-                    # Core stock data tools
-                    get_stock_data,
-                    # Technical indicators
+                    get_crypto_ohlcv,
                     get_indicators,
+                    get_perps_data,
                 ]
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
                     get_news,
+                    get_sentiment,
                 ]
             ),
             "news": ToolNode(
                 [
-                    # News and insider information
                     get_news,
                     get_global_news,
-                    get_insider_transactions,
                 ]
             ),
             "fundamentals": ToolNode(
                 [
-                    # Fundamental analysis tools
                     get_fundamentals,
-                    get_balance_sheet,
-                    get_cashflow,
-                    get_income_statement,
+                    get_onchain_metrics,
+                    get_tokenomics,
                 ]
             ),
         }
 
     def _resolve_benchmark(self, ticker: str) -> str:
-        """Pick the benchmark ticker for alpha calculation against ``ticker``.
-
-        ``config["benchmark_ticker"]`` overrides everything when set; otherwise
-        the suffix map matches the ticker's exchange suffix (e.g. ``.T`` for
-        Tokyo). US-listed tickers without a dotted suffix fall through to the
-        empty-suffix entry (SPY by default). Unrecognised suffixes (including
-        US tickers with dots like ``BRK.B``) also fall back to the empty-suffix
-        entry, which is the right default because the alpha calculation works
-        in USD.
-        """
+        """Pick the benchmark crypto pair for alpha calculation."""
         explicit = self.config.get("benchmark_ticker")
         if explicit:
             return explicit
         benchmark_map = self.config.get("benchmark_map", {})
-        ticker_upper = ticker.upper()
-        for suffix, benchmark in benchmark_map.items():
-            if suffix and ticker_upper.endswith(suffix.upper()):
-                return benchmark
-        return benchmark_map.get("", "SPY")
+        try:
+            base = parse_crypto_pair(ticker).base
+            if base in benchmark_map:
+                return benchmark_map[base]
+        except ValueError:
+            pass
+        return benchmark_map.get("", "BTC/USDT")
 
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5,
-        benchmark: str = "SPY",
+        benchmark: str = "BTC/USDT",
     ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
-        """Fetch raw and alpha return for ticker over holding_days from trade_date.
-
-        ``benchmark`` is the index used as the alpha baseline (resolved by the
-        caller via ``_resolve_benchmark``). Returns ``(raw_return, alpha_return,
-        actual_holding_days)`` or ``(None, None, None)`` if price data is
-        unavailable (too recent, delisted, or network error).
-        """
+        """Fetch raw and alpha return using crypto OHLCV (24/7, no holiday gaps)."""
         try:
-            start = datetime.strptime(trade_date, "%Y-%m-%d")
-            end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
-            end_str = end.strftime("%Y-%m-%d")
+            end_dt = datetime.strptime(trade_date, "%Y-%m-%d") + timedelta(days=holding_days + 2)
+            end_str = end_dt.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+            asset_df = load_ohlcv(ticker, end_str)
+            bench_df = load_ohlcv(benchmark, end_str)
+            start_dt = datetime.strptime(trade_date, "%Y-%m-%d")
 
-            if len(stock) < 2 or len(bench) < 2:
+            asset_slice = asset_df[asset_df["Date"] >= start_dt].reset_index(drop=True)
+            bench_slice = bench_df[bench_df["Date"] >= start_dt].reset_index(drop=True)
+
+            if len(asset_slice) < 2 or len(bench_slice) < 2:
                 return None, None, None
 
-            actual_days = min(holding_days, len(stock) - 1, len(bench) - 1)
+            actual_days = min(holding_days, len(asset_slice) - 1, len(bench_slice) - 1)
             raw = float(
-                (stock["Close"].iloc[actual_days] - stock["Close"].iloc[0])
-                / stock["Close"].iloc[0]
+                (asset_slice["Close"].iloc[actual_days] - asset_slice["Close"].iloc[0])
+                / asset_slice["Close"].iloc[0]
             )
             bench_ret = float(
-                (bench["Close"].iloc[actual_days] - bench["Close"].iloc[0])
-                / bench["Close"].iloc[0]
+                (bench_slice["Close"].iloc[actual_days] - bench_slice["Close"].iloc[0])
+                / bench_slice["Close"].iloc[0]
             )
             alpha = raw - bench_ret
             return raw, alpha, actual_days
@@ -308,15 +293,8 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
-        """Resolve ticker identity once and return the full instrument context.
-
-        Deterministic yfinance lookup (cached, fail-open) injected into a
-        context string so every agent anchors to the real company instead of
-        hallucinating one from the price chart (#814). Both the propagate()
-        path and the CLI call this so the resolved identity reaches the whole
-        graph regardless of entry point.
-        """
+    def resolve_instrument_context(self, ticker: str, asset_type: str = "crypto") -> str:
+        """Resolve crypto asset identity once via CoinGecko (cached, fail-open)."""
         identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
@@ -324,15 +302,13 @@ class TradingAgentsGraph:
         self,
         company_name,
         trade_date,
-        asset_type: str = "stock",
+        asset_type: str = "crypto",
         stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         callbacks: Optional[List] = None,
     ):
-        """Run the trading agents graph for a company on a specific date.
+        """Run the trading agents graph for a crypto pair on a specific date.
 
-        ``asset_type`` selects between the stock pipeline (default) and the
-        crypto pipeline (``"crypto"``) shipped in #567 — the CLI auto-detects
-        from the ticker; programmatic callers pass it explicitly. When
+        When
         ``checkpoint_enabled`` is set in config, the graph is recompiled with
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
@@ -382,7 +358,7 @@ class TradingAgentsGraph:
         self,
         company_name,
         trade_date,
-        asset_type: str = "stock",
+        asset_type: str = "crypto",
         stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         callbacks: Optional[List] = None,
     ):
@@ -478,7 +454,7 @@ class TradingAgentsGraph:
 
         # Save to file. Reject ticker values that would escape the
         # results directory when joined as a path component.
-        safe_ticker = safe_ticker_component(self.ticker)
+        safe_ticker = safe_ticker_component(safe_path_key(self.ticker))
         directory = Path(self.config["results_dir"]) / safe_ticker / "TradingAgentsStrategy_logs"
         directory.mkdir(parents=True, exist_ok=True)
 

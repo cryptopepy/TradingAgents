@@ -99,7 +99,7 @@ class TestRenderResearchPlan:
 
 def _make_trader_state():
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": "BTC/USDT",
         "investment_plan": "**Recommendation**: Buy\n**Rationale**: ...\n**Strategic Actions**: ...",
     }
 
@@ -173,7 +173,7 @@ class TestTraderAgent:
 
 def _make_rm_state():
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": "BTC/USDT",
         "investment_debate_state": {
             "history": "Bull and bear arguments here.",
             "bull_history": "Bull says...",
@@ -293,9 +293,9 @@ class TestRenderSentimentReport:
 
 def _make_sentiment_state():
     return {
-        "company_of_interest": "NVDA",
+        "company_of_interest": "BTC/USDT",
         "trade_date": "2026-01-15",
-        "asset_type": "stock",
+        "asset_type": "crypto",
         "messages": [],
     }
 
@@ -342,7 +342,7 @@ class TestSentimentAnalystAgent:
     def test_prompt_contains_ticker(self):
         captured = {}
         create_sentiment_analyst(_structured_sentiment_llm(captured))(_make_sentiment_state())
-        assert any("NVDA" in str(m) for m in captured["prompt"])
+        assert any("BTC/USDT" in str(m) for m in captured["prompt"])
 
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain = "**Overall Sentiment:** **Bearish** (Score: 3.0/10)\n**Confidence:** Low\n\nLimited data."
