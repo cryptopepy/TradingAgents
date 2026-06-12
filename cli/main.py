@@ -1347,16 +1347,82 @@ def backtest_cmd(
     live: bool = typer.Option(
         False,
         "--live",
-        help="Use ccxt live prices for deployment bridge (sets live_mode).",
+        help="Use ccxt Binance live prices when vendor APIs unavailable (sets live_mode).",
+    ),
+    paper: bool = typer.Option(
+        False,
+        "--paper",
+        help="After backtest, start paper trading simulation with the winning strategy.",
     ),
 ):
     """Run strategy backtest optimization without full LLM analysis."""
+    from cli.post_analysis import prompt_deploy_simulator, render_optimization_table, run_backtest_with_progress
+    from tradingagents.backtest import deploy_winning_strategy
+
     analysis_date = date or datetime.datetime.now().strftime("%Y-%m-%d")
     config = DEFAULT_CONFIG.copy()
     if live:
         config["live_mode"] = True
-    summary = run_backtest_for_ticker(ticker, analysis_date, config)
+    try:
+        optimization = run_backtest_with_progress(ticker, analysis_date)
+        optimization = deploy_winning_strategy(optimization, config)
+        summary = __import__("tradingagents.backtest", fromlist=["format_optimization_summary"]).format_optimization_summary(optimization)
+    except Exception as exc:
+        console.print(f"[red]Backtest failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
     console.print(Panel(Markdown(summary), title="Backtest Optimization", border_style="cyan"))
+    console.print()
+    console.print(render_optimization_table(optimization))
+    if paper:
+        prompt_deploy_simulator(optimization, config)
+
+
+@app.command("paper")
+def paper_cmd(
+    ticker: str = typer.Option("BTC/USDT", "--ticker", "-t", help="Crypto pair"),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Enable Binance ccxt fallback when CryptoCompare/CoinGecko unavailable.",
+    ),
+    adaptive: bool = typer.Option(
+        True,
+        "--adaptive/--no-adaptive",
+        help="Re-run backtests and switch strategy on sustained drawdown.",
+    ),
+    ticks: Optional[int] = typer.Option(
+        None,
+        "--ticks",
+        help="Number of price ticks to simulate (default: run until Ctrl+C).",
+    ),
+    strategy: Optional[str] = typer.Option(
+        None,
+        "--strategy",
+        help="Strategy name from registry (default: run backtest to pick winner).",
+    ),
+    equity: float = typer.Option(
+        10_000.0,
+        "--equity",
+        help="Starting portfolio equity in USD.",
+    ),
+):
+    """Run paper trading simulation with live prices and portfolio tracking."""
+    from cli.paper_trading import run_paper_session
+
+    config = DEFAULT_CONFIG.copy()
+    config["paper_trade_enabled"] = True
+    config["paper_initial_equity"] = equity
+    config["paper_adaptive_enabled"] = adaptive
+    if live:
+        config["live_mode"] = True
+    run_paper_session(
+        ticker,
+        config,
+        ticks=ticks,
+        adaptive=adaptive,
+        strategy_name=strategy,
+    )
 
 
 if __name__ == "__main__":

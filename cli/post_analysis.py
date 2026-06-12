@@ -18,7 +18,7 @@ from tradingagents.backtest import (
     optimize_strategies,
 )
 from tradingagents.backtest.schemas import StrategyMetrics
-from tradingagents.simulator import PaperTradingSession, StrategySignal, start_paper_trading_scaffold
+from cli.paper_trading import prompt_paper_options, run_paper_session
 
 console = Console()
 
@@ -30,6 +30,10 @@ POST_ANALYSIS_CHOICES = [
     questionary.Choice(
         title="Customize Backtest Horizon & Parameters",
         value="custom_backtest",
+    ),
+    questionary.Choice(
+        title="Start Paper Trading Simulation (live prices, portfolio tracking)",
+        value="paper_trade",
     ),
     questionary.Choice(
         title="Return to Main Menu / Select New Coin Pair",
@@ -158,51 +162,28 @@ def prompt_deploy_simulator(
     optimization: OptimizationResult,
     config: dict,
 ) -> None:
-    """Optional follow-up: deploy winning strategy to paper simulator."""
+    """Optional follow-up: deploy winning strategy to full paper simulator."""
     if optimization.winner is None:
         console.print("[yellow]No winning strategy to deploy.[/yellow]")
         return
 
     deploy = questionary.confirm(
-        "Deploy Strategy to Live Crypto/USD Paper Trading Simulator?",
-        default=False,
+        "Start full Paper Trading Simulation with the winning strategy?",
+        default=True,
     ).ask()
     if not deploy:
         return
 
     optimization = deploy_winning_strategy(optimization, config)
-    signal = StrategySignal.from_string(optimization.paper_signal or "flat")
-    session = PaperTradingSession(
-        symbol=optimization.symbol,
+    opts = prompt_paper_options(config)
+    run_paper_session(
+        optimization.symbol,
+        config,
+        ticks=opts.get("ticks"),
+        adaptive=opts.get("adaptive"),
         strategy_name=optimization.winner.strategy_name,
-        signal=signal,
-        parameters=optimization.winner.parameters,
         lookback=optimization.winner.lookback,
     )
-
-    console.print(
-        Panel(
-            f"Starting paper simulator for [bold]{session.symbol}[/bold]\n"
-            f"Strategy: {session.strategy_name} ({session.lookback})\n"
-            f"Signal: {session.signal.value}\n"
-            f"Live mode: {'on' if config.get('live_mode') else 'off (dummy feed)'}",
-            title="Paper Trading Simulator",
-            border_style="green",
-        )
-    )
-
-    tick_count = 0
-
-    def _on_tick(result) -> None:
-        nonlocal tick_count
-        tick_count += 1
-        console.print(
-            f"  Tick {tick_count}: ${result.price:.4f} | {result.action_taken} | "
-            f"equity={result.portfolio_equity:.4f}"
-        )
-
-    start_paper_trading_scaffold(session, config=config, max_ticks=3, on_tick=_on_tick)
-    console.print("[dim]Paper simulator scaffold ran 3 ticks (daemon thread).[/dim]")
 
 
 def run_interactive_backtest(
@@ -283,4 +264,13 @@ def show_post_analysis_menu(
             continue
         if action == "custom_backtest":
             run_interactive_backtest(ticker, analysis_date, config, custom=True)
+            continue
+        if action == "paper_trade":
+            opts = prompt_paper_options(config)
+            run_paper_session(
+                ticker,
+                config,
+                ticks=opts.get("ticks"),
+                adaptive=opts.get("adaptive"),
+            )
             continue
