@@ -46,7 +46,7 @@ class TestTechnicalMetrics:
 
     def test_drawdown_detects_peak_to_trough(self):
         equity = pd.Series([1.0, 1.1, 1.05, 0.9, 0.95])
-        assert _compute_drawdown(equity) == pytest.approx(0.1 / 1.1, rel=1e-3)
+        assert _compute_drawdown(equity) == pytest.approx((1.1 - 0.9) / 1.1, rel=1e-3)
 
 
 @pytest.mark.unit
