@@ -14,7 +14,10 @@ from tradingagents.backtest import (
     optimize_strategies,
     require_optimization_results,
 )
-from tradingagents.backtest.engine import fetch_historical_crypto
+from tradingagents.backtest.engine import (
+    _last_closed_bar_dt,
+    fetch_historical_crypto,
+)
 from tradingagents.backtest.historical_data import fetch_intraday_ohlcv
 from tradingagents.backtest.schemas import OptimizationResult
 
@@ -36,6 +39,24 @@ def _sample_ohlcv(rows: int = 80) -> pd.DataFrame:
 
 @pytest.mark.unit
 class TestBacktestHistoricalData:
+    def test_cryptocompare_api_error_surfaces_message(self):
+        error_payload = {"Response": "Error", "Message": "You are over your rate limit"}
+
+        with patch(
+            "tradingagents.dataflows.crypto_common.http_get_json",
+            return_value=error_payload,
+        ), patch(
+            "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
+            side_effect=Exception("451 blocked"),
+        ):
+            with pytest.raises(BacktestDataError, match="rate limit"):
+                fetch_intraday_ohlcv(
+                    "BTC/USDT",
+                    pd.Timestamp("2026-06-01 00:00").to_pydatetime(),
+                    pd.Timestamp("2026-06-01 08:00").to_pydatetime(),
+                    300,
+                )
+
     def test_fetch_intraday_ohlcv_raises_backtest_data_error(self):
         with patch(
             "tradingagents.backtest.historical_data._fetch_cryptocompare_ohlcv",
@@ -79,6 +100,7 @@ class TestBacktestHistoricalData:
     def test_fetch_historical_crypto_caps_end_dt_to_now_for_today(self):
         df = _sample_ohlcv(80)
         noon = datetime(2026, 6, 12, 12, 0, 0)
+        expected_end = _last_closed_bar_dt(noon, LookbackWindow.H8.granularity_seconds())
 
         with patch(
             "tradingagents.backtest.engine.fetch_intraday_ohlcv",
@@ -89,9 +111,30 @@ class TestBacktestHistoricalData:
             )
 
         start_dt, end_dt = mock_fetch.call_args[0][1], mock_fetch.call_args[0][2]
-        assert end_dt == noon
-        assert end_dt <= noon
+        assert end_dt == expected_end
+        assert end_dt < noon
         assert start_dt == end_dt - LookbackWindow.H8.to_timedelta()
+
+    def test_fetch_historical_crypto_floors_end_to_last_closed_bar_for_today(self):
+        """Today's intraday window must not request the in-progress candle."""
+        df = _sample_ohlcv(80)
+        now = datetime(2026, 6, 12, 17, 56, 30)
+        granularity = LookbackWindow.H8.granularity_seconds()
+        expected_end = _last_closed_bar_dt(now, granularity)
+
+        with patch(
+            "tradingagents.backtest.engine.fetch_intraday_ohlcv",
+            return_value=df,
+        ) as mock_fetch:
+            fetch_historical_crypto(
+                "BTC/USDT", "2026-06-12", LookbackWindow.H8, now=now
+            )
+
+        end_dt = mock_fetch.call_args[0][2]
+        assert end_dt == expected_end
+        assert end_dt.minute % (granularity // 60) == (expected_end.minute % (granularity // 60))
+        assert end_dt.second == 0
+        assert end_dt < now
 
     def test_fetch_historical_crypto_uses_end_of_day_for_past_dates(self):
         df = _sample_ohlcv(80)
@@ -107,6 +150,14 @@ class TestBacktestHistoricalData:
 
         end_dt = mock_fetch.call_args[0][2]
         assert end_dt.hour == 23 and end_dt.minute == 59
+
+    def test_last_closed_bar_dt_aligns_to_granularity(self):
+        now = datetime(2026, 6, 12, 17, 56, 30)
+        for lookback in LookbackWindow:
+            g = lookback.granularity_seconds()
+            closed = _last_closed_bar_dt(now, g)
+            assert closed < now
+            assert int(pd.Timestamp(closed).tz_localize("UTC").timestamp()) % g == 0
 
     def test_fetch_historical_crypto_raises_when_window_empty_after_cap(self):
         noon = datetime(2026, 6, 12, 12, 0, 0)

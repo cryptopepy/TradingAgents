@@ -122,6 +122,13 @@ def _fetch_cryptocompare_ohlcv(
                 symbol, parse_crypto_pair(symbol).display, str(last_exc)
             ) from last_exc
 
+        if data.get("Response") == "Error":
+            raise NoMarketDataError(
+                symbol,
+                parse_crypto_pair(symbol).display,
+                data.get("Message") or "CryptoCompare API error",
+            )
+
         raw = (data.get("Data") or {}).get("Data") or []
         if not raw:
             break

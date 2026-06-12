@@ -136,6 +136,18 @@ def _resolve_backtest_end_dt(
     return end_dt, capped
 
 
+def _last_closed_bar_dt(dt: datetime, granularity_seconds: int) -> datetime:
+    """Open time of the last fully closed OHLCV bar at or before dt (naive UTC)."""
+    ts = int(pd.Timestamp(dt).tz_localize("UTC").timestamp())
+    current_bar_open = ts - (ts % granularity_seconds)
+    last_closed_open = current_bar_open - granularity_seconds
+    return (
+        pd.Timestamp(last_closed_open, unit="s", tz="UTC")
+        .tz_localize(None)
+        .to_pydatetime()
+    )
+
+
 def _cache_path(ticker: str, granularity: int, start: str, end: str) -> Path:
     config = get_config()
     cache_dir = Path(config["data_cache_dir"]) / "historic_crypto"
@@ -204,7 +216,17 @@ def fetch_historical_crypto(
     """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks."""
     ticker = _historic_ticker(symbol)
     granularity = lookback.granularity_seconds()
-    end_dt, _ = _resolve_backtest_end_dt(end_date, now=now)
+    end_dt, capped = _resolve_backtest_end_dt(end_date, now=now)
+    if capped:
+        floored = _last_closed_bar_dt(end_dt, granularity)
+        if floored < end_dt:
+            logger.debug(
+                "Floored backtest end from %s to last closed %ss bar at %s",
+                end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                granularity,
+                floored.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            end_dt = floored
     start_dt = end_dt - lookback.to_timedelta()
     if end_dt <= start_dt:
         raise BacktestDataError(
