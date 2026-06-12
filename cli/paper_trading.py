@@ -6,10 +6,13 @@ import signal
 import sys
 from typing import Optional
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from cli.keyboard_input import cbreak_stdin, poll_stdin_key
 
 from tradingagents.backtest import (
     deploy_winning_strategy,
@@ -19,6 +22,8 @@ from tradingagents.backtest import (
 from tradingagents.simulator import PaperTradingEngine, PaperTradingState, session_from_optimization
 
 console = Console()
+
+PAPER_CONTROLS_TEXT = "Controls: (c) close position · (q) quit"
 
 
 def render_paper_state_table(state: PaperTradingState) -> Table:
@@ -42,6 +47,12 @@ def render_paper_state_table(state: PaperTradingState) -> Table:
     table.add_row("Position", state.open_position or "flat")
     table.add_row("Adaptive re-tests", str(state.rebacktest_count))
     return table
+
+
+def render_paper_live_display(state: PaperTradingState) -> Group:
+    """Rich live view: status table plus keyboard controls footer."""
+    controls = Text(PAPER_CONTROLS_TEXT, style="dim")
+    return Group(render_paper_state_table(state), controls)
 
 
 def run_paper_session(
@@ -86,6 +97,7 @@ def run_paper_session(
     engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
     stop_requested = False
+    quit_requested = False
     previous_sigint = signal.getsignal(signal.SIGINT)
 
     def _handle_sigint(_signum, _frame) -> None:
@@ -97,7 +109,8 @@ def run_paper_session(
         Panel(
             f"Paper simulation for [bold]{ticker}[/bold]\n"
             f"Strategy: {session.strategy_name} | Adaptive: {'on' if adaptive_on else 'off'}\n"
-            f"Interval: {interval}s | Press Ctrl+C to stop",
+            f"Interval: {interval}s\n"
+            f"{PAPER_CONTROLS_TEXT}",
             title="Paper Trading Simulation",
             border_style="green",
         )
@@ -106,45 +119,56 @@ def run_paper_session(
     tick_count = 0
     latest_state: Optional[PaperTradingState] = None
 
-    def _on_state(state: PaperTradingState) -> None:
-        nonlocal latest_state
-        latest_state = state
-
     def _on_switch(old: str, new: str) -> None:
         console.print(
             f"[yellow][AUTONOMOUS ROTATION]:[/yellow] Strategy changed from [{old}] to [{new}] "
             "due to threshold violation."
         )
 
-    engine.on_state_change = _on_state
     engine.on_strategy_switch = _on_switch
 
     signal.signal(signal.SIGINT, _handle_sigint)
     try:
-        with Live(console=console, refresh_per_second=4, transient=False) as live:
-            def _on_tick(_result) -> None:
-                nonlocal tick_count
-                tick_count += 1
-                if latest_state is not None:
-                    live.update(render_paper_state_table(latest_state))
+        with cbreak_stdin():
+            with Live(console=console, refresh_per_second=4, transient=False) as live:
+                def _on_state(state: PaperTradingState) -> None:
+                    nonlocal latest_state
+                    latest_state = state
+                    live.update(render_paper_live_display(state))
 
-            try:
-                engine.run_loop(
-                    interval_seconds=interval,
-                    max_ticks=ticks,
-                    on_tick=_on_tick,
-                )
-            except KeyboardInterrupt:
-                stop_requested = True
-                engine.stop()
+                engine.on_state_change = _on_state
+
+                def _on_tick(_result) -> None:
+                    nonlocal tick_count
+                    tick_count += 1
+                    if latest_state is not None:
+                        live.update(render_paper_live_display(latest_state))
+
+                def _poll_key(timeout: float) -> Optional[str]:
+                    return poll_stdin_key(timeout)
+
+                try:
+                    engine.run_loop(
+                        interval_seconds=interval,
+                        max_ticks=ticks,
+                        on_tick=_on_tick,
+                        poll_key=_poll_key,
+                    )
+                except KeyboardInterrupt:
+                    stop_requested = True
+                    engine.stop()
+                if not stop_requested and engine._stop_event.is_set():
+                    quit_requested = True
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
 
     if latest_state is not None:
         console.print()
-        console.print(render_paper_state_table(latest_state))
-    if stop_requested:
-        console.print("[yellow]Paper trading stopped (Ctrl+C). State saved.[/yellow]")
+        console.print(render_paper_live_display(latest_state))
+    if quit_requested:
+        console.print("[yellow]Paper trading stopped (q). State saved.[/yellow]")
+    elif stop_requested:
+        console.print("[yellow]Paper trading stopped. State saved.[/yellow]")
     console.print(f"[dim]Paper session ended after {tick_count} tick(s).[/dim]")
 
 

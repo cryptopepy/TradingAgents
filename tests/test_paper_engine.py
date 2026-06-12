@@ -27,7 +27,11 @@ class TestPaperTradingEngine:
             signal=StrategySignal.LONG,
             initial_equity=10_000.0,
         )
-        engine = PaperTradingEngine(session, adaptive_enabled=False)
+        engine = PaperTradingEngine(
+            session,
+            {"paper_fresh_start": True, "paper_state_persistence": False},
+            adaptive_enabled=False,
+        )
         result = engine.tick()
         assert result.price == pytest.approx(50_000.0, rel=1e-4)
         state = engine.get_state()

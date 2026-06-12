@@ -37,12 +37,28 @@ _SLEEP_POLL_SECONDS = 0.25
 
 def _sleep_until_stopped(stop_event: threading.Event, seconds: float) -> None:
     """Sleep in short slices so ``stop_event`` can interrupt promptly."""
+    _sleep_until_stopped_or_key(stop_event, seconds)
+
+
+def _sleep_until_stopped_or_key(
+    stop_event: threading.Event,
+    seconds: float,
+    poll_key: Optional[Callable[[float], Optional[str]]] = None,
+) -> Optional[str]:
+    """Sleep in short slices; return a key from ``poll_key`` if pressed."""
     deadline = time.monotonic() + seconds
     while not stop_event.is_set():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        time.sleep(min(_SLEEP_POLL_SECONDS, remaining))
+        slice_seconds = min(_SLEEP_POLL_SECONDS, remaining)
+        if poll_key is not None:
+            key = poll_key(slice_seconds)
+            if key:
+                return key
+        else:
+            time.sleep(slice_seconds)
+    return None
 
 
 class StrategySignal(str, Enum):

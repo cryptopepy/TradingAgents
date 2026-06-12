@@ -16,7 +16,7 @@ from tradingagents.backtest import (
     optimize_strategies,
 )
 from tradingagents.backtest.matcher import SimulatedMatcher
-from tradingagents.backtest.portfolio import VirtualPortfolio
+from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price
@@ -25,7 +25,7 @@ from tradingagents.simulator.core import (
     PaperTradingSession,
     StrategySignal,
     TickEvaluationResult,
-    _sleep_until_stopped,
+    _sleep_until_stopped_or_key,
     evaluate_live_market_tick,
 )
 from tradingagents.simulator.persistence import (
@@ -239,6 +239,37 @@ class PaperTradingEngine:
             self.on_state_change(state)
         return result
 
+    def close_open_position(self, *, reoptimize: bool = True) -> bool:
+        """Close the open position at the current mark price and optionally re-optimize."""
+        if self.session.symbol not in self.portfolio.positions:
+            return False
+
+        quote = self._fetch_price()
+        now = quote.timestamp
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        self.portfolio.mark_to_market({self.session.symbol: quote.price})
+        self.matcher.submit_intent(
+            TransactionIntent(
+                timestamp=now,
+                asset=self.session.symbol,
+                direction=Direction.EXIT,
+            ),
+            reference_price=quote.price,
+        )
+        self.portfolio.mark_to_market({self.session.symbol: quote.price})
+        self._adaptive.record_equity(self.portfolio.equity, now)
+
+        if reoptimize:
+            self._run_adaptive_rebacktest(now)
+
+        state = self.get_state(quote)
+        self._persist_session(quote)
+        if self.on_state_change:
+            self.on_state_change(state)
+        return True
+
     def _run_adaptive_rebacktest(self, now: datetime) -> None:
         """Re-run optimization and switch strategy when a better one is found."""
         self._adaptive.note_drawdown_review(now)
@@ -323,6 +354,7 @@ class PaperTradingEngine:
         interval_seconds: Optional[float] = None,
         max_ticks: Optional[int] = None,
         on_tick: Optional[Callable[[TickEvaluationResult], None]] = None,
+        poll_key: Optional[Callable[[float], Optional[str]]] = None,
     ) -> None:
         """Blocking poll loop until ``max_ticks`` or stop requested."""
         interval = interval_seconds or float(self.config.get("paper_tick_interval_seconds", 10.0))
@@ -335,7 +367,12 @@ class PaperTradingEngine:
                 ticks += 1
                 if max_ticks is not None and ticks >= max_ticks:
                     break
-                _sleep_until_stopped(self._stop_event, interval)
+                key = _sleep_until_stopped_or_key(self._stop_event, interval, poll_key)
+                if key == "q":
+                    self._stop_event.set()
+                    break
+                if key == "c":
+                    self.close_open_position(reoptimize=True)
         except KeyboardInterrupt:
             self._stop_event.set()
 
