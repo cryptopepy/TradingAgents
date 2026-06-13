@@ -192,7 +192,7 @@ def run_paper_session(
     try:
         with cbreak_stdin():
             def _run_loop_body() -> None:
-                nonlocal tick_count, quit_requested, stop_requested
+                nonlocal tick_count, quit_requested, stop_requested, latest_state
 
                 def _on_state(state: PaperTradingState) -> None:
                     nonlocal latest_state
