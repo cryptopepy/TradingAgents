@@ -72,12 +72,14 @@ class PaperTradingEngine:
         adaptive_enabled: bool = True,
         on_state_change: Optional[Callable[[PaperTradingState], None]] = None,
         on_strategy_switch: Optional[Callable[[str, str], None]] = None,
+        on_activity: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.session = session
         self.config = config or get_config()
         self.adaptive_enabled = adaptive_enabled
         self.on_state_change = on_state_change
         self.on_strategy_switch = on_strategy_switch
+        self.on_activity = on_activity
 
         equity = session.initial_equity or float(self.config.get("paper_initial_equity", 10_000.0))
         fee_bps = float(session.slippage_bps)
@@ -90,6 +92,8 @@ class PaperTradingEngine:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._signals_halted = False
+        self._last_logged_price_source: Optional[str] = None
+        self._price_feed_logged = False
 
         review_minutes = float(
             self.config.get(
@@ -198,12 +202,48 @@ class PaperTradingEngine:
             config=self.config,
         )
 
-    def _log_autonomous_rotation(self, old_name: str, new_name: str) -> None:
-        message = (
-            f"[AUTONOMOUS ROTATION]: Strategy changed from [{old_name}] to [{new_name}] "
-            "due to threshold violation."
+    def _emit_activity(self, message: str) -> None:
+        if self.on_activity and message:
+            self.on_activity(message)
+
+    def _log_price_feed(self, quote: LivePrice) -> None:
+        source = quote.source.value
+        if self._price_feed_logged and source == self._last_logged_price_source:
+            return
+        from tradingagents.simulator.activity_messages import format_price_feed
+
+        self._emit_activity(
+            format_price_feed(
+                source,
+                quote.price,
+                first=not self._price_feed_logged,
+            )
         )
-        logger.warning(message)
+        self._last_logged_price_source = source
+        self._price_feed_logged = True
+
+    def _log_tick_action(self, result: TickEvaluationResult) -> None:
+        if result.action_taken == "hold":
+            return
+        from tradingagents.simulator.activity_messages import format_tick_action
+
+        self._emit_activity(
+            format_tick_action(
+                result.action_taken,
+                result.price,
+                result.portfolio_equity,
+            )
+        )
+
+    def _log_backtest_activity(self, message: str) -> None:
+        self._emit_activity(message)
+
+    def _log_autonomous_rotation(self, old_name: str, new_name: str) -> None:
+        from tradingagents.simulator.activity_messages import format_strategy_switch
+
+        message = format_strategy_switch(old_name, new_name)
+        logger.warning("[AUTONOMOUS ROTATION]: %s", message)
+        self._emit_activity(message)
         log_dir = self.config.get("results_dir")
         if log_dir:
             from pathlib import Path
@@ -211,11 +251,14 @@ class PaperTradingEngine:
             path = Path(log_dir) / "paper_rotation.log"
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")
+                handle.write(
+                    f"{datetime.now(timezone.utc).isoformat()} [AUTONOMOUS ROTATION] {message}\n"
+                )
 
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""
         quote = self._fetch_price()
+        self._log_price_feed(quote)
         signal = self.refresh_signal() if not self._signals_halted else StrategySignal.FLAT
         result = evaluate_live_market_tick(
             self.portfolio,
@@ -228,6 +271,7 @@ class PaperTradingEngine:
             slippage_bps=self.session.slippage_bps,
         )
         self._tick_history.append(result)
+        self._log_tick_action(result)
         self._adaptive.record_equity(result.portfolio_equity, result.timestamp)
 
         if self.adaptive_enabled and self._adaptive.should_rebacktest(result.timestamp):
@@ -259,6 +303,11 @@ class PaperTradingEngine:
             reference_price=quote.price,
         )
         self.portfolio.mark_to_market({self.session.symbol: quote.price})
+        from tradingagents.simulator.activity_messages import format_tick_action
+
+        self._emit_activity(
+            format_tick_action("manual_close", quote.price, self.portfolio.equity)
+        )
         self._adaptive.record_equity(self.portfolio.equity, now)
 
         if reoptimize:
@@ -273,24 +322,71 @@ class PaperTradingEngine:
     def _run_adaptive_rebacktest(self, now: datetime) -> None:
         """Re-run optimization and switch strategy when a better one is found."""
         self._adaptive.note_drawdown_review(now)
+        drawdown = self._adaptive.current_drawdown_pct()
         end_date = now.strftime("%Y-%m-%d")
         logger.info(
             "Adaptive re-backtest triggered for %s (drawdown %.2f%%)",
             self.session.symbol,
-            self._adaptive.current_drawdown_pct(),
+            drawdown,
         )
+        from tradingagents.simulator.activity_messages import (
+            format_drawdown_rebacktest_banner,
+            format_horizon_complete,
+            format_horizon_skipped,
+            format_horizon_start,
+            format_optimization_winner,
+        )
+
+        self._emit_activity(format_drawdown_rebacktest_banner(drawdown))
         self._signals_halted = True
+
+        def _on_horizon_start(lookback: LookbackWindow) -> None:
+            self._log_backtest_activity(format_horizon_start(lookback.value))
+
+        def _on_horizon_complete(
+            lookback: LookbackWindow,
+            provider: str,
+            bar_count: int,
+            cache_hit: bool,
+            metrics: list,
+        ) -> None:
+            self._log_backtest_activity(
+                format_horizon_complete(
+                    lookback.value,
+                    provider,
+                    bar_count,
+                    metrics,
+                    cache_hit=cache_hit,
+                )
+            )
+
+        def _on_horizon_skipped(lookback: LookbackWindow, reason: str) -> None:
+            self._log_backtest_activity(format_horizon_skipped(lookback.value, reason))
+
         try:
-            optimization = optimize_strategies(self.session.symbol, end_date)
+            optimization = optimize_strategies(
+                self.session.symbol,
+                end_date,
+                config=self.config,
+                on_horizon_start=_on_horizon_start,
+                on_horizon_complete=_on_horizon_complete,
+                on_horizon_skipped=_on_horizon_skipped,
+            )
         except Exception as exc:
             logger.warning("Adaptive re-backtest failed: %s", exc)
+            self._emit_activity(f"Re-backtest failed — {exc}")
             self._signals_halted = False
             return
 
         if optimization.winner is None:
+            self._emit_activity("Re-backtest complete — no winning strategy found")
             self._adaptive.mark_rebacktest_done(now)
             self._signals_halted = False
             return
+
+        self._emit_activity(
+            format_optimization_winner(optimization.winner, prefix="Re-backtest winner")
+        )
 
         old_name = self.session.strategy_name
         new_name = optimization.winner.strategy_name

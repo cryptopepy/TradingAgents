@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import signal
-import sys
 from typing import Optional
 
 from rich.console import Console, Group
@@ -12,7 +11,16 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from cli.activity_log import (
+    ActivityLog,
+    is_live_display_tty,
+    make_backtest_callbacks,
+)
 from cli.keyboard_input import cbreak_stdin, poll_stdin_key
+from tradingagents.simulator.activity_messages import (
+    format_optimization_winner,
+    format_session_start,
+)
 
 from tradingagents.backtest import (
     deploy_winning_strategy,
@@ -49,10 +57,49 @@ def render_paper_state_table(state: PaperTradingState) -> Table:
     return table
 
 
-def render_paper_live_display(state: PaperTradingState) -> Group:
-    """Rich live view: status table plus keyboard controls footer."""
+def render_paper_live_display(
+    state: PaperTradingState,
+    log: Optional[ActivityLog] = None,
+) -> Group:
+    """Rich live view: optional activity log, status table, controls footer."""
     controls = Text(PAPER_CONTROLS_TEXT, style="dim")
-    return Group(render_paper_state_table(state), controls)
+    parts = []
+    if log is not None and log.enabled:
+        parts.append(log.render_panel())
+    parts.extend([render_paper_state_table(state), controls])
+    return Group(*parts)
+
+
+def _run_initial_backtest(
+    ticker: str,
+    cfg: dict,
+    log: ActivityLog,
+):
+    """Run strategy optimization with visible per-horizon progress."""
+    log.append(f"Running backtest to select strategy for {ticker}…")
+    end_date = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    on_start, on_complete, on_skipped = make_backtest_callbacks(log)
+    optimization = require_optimization_results(
+        optimize_strategies(
+            ticker,
+            end_date,
+            config=cfg,
+            on_horizon_start=on_start,
+            on_horizon_complete=on_complete,
+            on_horizon_skipped=on_skipped,
+        )
+    )
+    optimization = deploy_winning_strategy(optimization, cfg)
+    if optimization.winner is None:
+        log.append("No winning strategy found — cannot start paper trading")
+        console.print("[red]No winning strategy found — cannot start paper trading.[/red]")
+        return None
+    log.append(format_optimization_winner(optimization.winner))
+    console.print(
+        f"[green]Recommended strategy:[/green] {optimization.winner.strategy_name} "
+        f"({optimization.winner.lookback})"
+    )
+    return session_from_optimization(optimization, cfg)
 
 
 def run_paper_session(
@@ -67,6 +114,13 @@ def run_paper_session(
     """Run interactive paper trading with live Rich status updates."""
     cfg = dict(config)
     adaptive_on = adaptive if adaptive is not None else bool(cfg.get("paper_adaptive_enabled", True))
+    use_live_log = is_live_display_tty()
+
+    def _echo(message: str) -> None:
+        if not use_live_log:
+            console.print(f"[dim]{__import__('datetime').datetime.now().strftime('%H:%M:%S')}[/dim] {message}")
+
+    log = ActivityLog(enabled=True, echo=_echo if not use_live_log else None)
 
     if strategy_name:
         from tradingagents.simulator import PaperTradingSession, StrategySignal
@@ -82,17 +136,9 @@ def run_paper_session(
             take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
         )
     else:
-        console.print(f"[cyan]Running backtest to select strategy for {ticker}…[/cyan]")
-        end_date = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-        optimization = require_optimization_results(optimize_strategies(ticker, end_date))
-        optimization = deploy_winning_strategy(optimization, cfg)
-        if optimization.winner is None:
-            console.print("[red]No winning strategy found — cannot start paper trading.[/red]")
+        session = _run_initial_backtest(ticker, cfg, log)
+        if session is None:
             return
-        session = session_from_optimization(optimization, cfg)
-        console.print(
-            f"[green]Recommended strategy:[/green] {session.strategy_name} ({session.lookback})"
-        )
 
     engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
@@ -104,6 +150,16 @@ def run_paper_session(
         nonlocal stop_requested
         stop_requested = True
         engine.stop()
+
+    log.append(
+        format_session_start(
+            ticker,
+            session.strategy_name,
+            session.lookback,
+            adaptive=adaptive_on,
+            interval=interval,
+        )
+    )
 
     console.print(
         Panel(
@@ -118,34 +174,47 @@ def run_paper_session(
 
     tick_count = 0
     latest_state: Optional[PaperTradingState] = None
+    live: Optional[Live] = None
+
+    def _refresh_display(state: Optional[PaperTradingState] = None) -> None:
+        target = state or latest_state
+        if target is not None and live is not None:
+            live.update(render_paper_live_display(target, log))
+
+    engine.on_activity = log.append
 
     def _on_switch(old: str, new: str) -> None:
-        console.print(
-            f"[yellow][AUTONOMOUS ROTATION]:[/yellow] Strategy changed from [{old}] to [{new}] "
-            "due to threshold violation."
-        )
+        log.append(f"Strategy switch (adaptive): {old} → {new}")
 
     engine.on_strategy_switch = _on_switch
 
     signal.signal(signal.SIGINT, _handle_sigint)
     try:
         with cbreak_stdin():
-            with Live(console=console, refresh_per_second=4, transient=False) as live:
+            def _run_loop_body() -> None:
+                nonlocal tick_count, quit_requested, stop_requested
+
                 def _on_state(state: PaperTradingState) -> None:
                     nonlocal latest_state
                     latest_state = state
-                    live.update(render_paper_live_display(state))
+                    if live is not None:
+                        _refresh_display(state)
 
                 engine.on_state_change = _on_state
 
                 def _on_tick(_result) -> None:
                     nonlocal tick_count
                     tick_count += 1
-                    if latest_state is not None:
-                        live.update(render_paper_live_display(latest_state))
+                    if live is not None:
+                        _refresh_display()
 
                 def _poll_key(timeout: float) -> Optional[str]:
                     return poll_stdin_key(timeout)
+
+                if latest_state is None:
+                    latest_state = engine.get_state()
+                    if live is not None:
+                        _refresh_display(latest_state)
 
                 try:
                     engine.run_loop(
@@ -159,12 +228,23 @@ def run_paper_session(
                     engine.stop()
                 if not stop_requested and engine._stop_event.is_set():
                     quit_requested = True
+
+            if use_live_log:
+                with Live(
+                    console=console,
+                    refresh_per_second=4,
+                    transient=False,
+                ) as live_ctx:
+                    live = live_ctx
+                    _run_loop_body()
+            else:
+                _run_loop_body()
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
 
     if latest_state is not None:
         console.print()
-        console.print(render_paper_live_display(latest_state))
+        console.print(render_paper_live_display(latest_state, log))
     if quit_requested:
         console.print("[yellow]Paper trading stopped (q). State saved.[/yellow]")
     elif stop_requested:

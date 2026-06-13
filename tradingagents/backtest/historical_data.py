@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 import pandas as pd
 import requests
@@ -290,6 +290,7 @@ def fetch_intraday_ohlcv(
     *,
     live_mode: bool = False,
     config: dict | None = None,
+    on_provider: Optional[Callable[[str, int], None]] = None,
 ) -> pd.DataFrame:
     """Fetch OHLCV for a backtest window via CryptoCompare → Binance → ccxt."""
     if granularity_seconds not in _VENDOR_SPECS:
@@ -329,6 +330,8 @@ def fetch_intraday_ohlcv(
                     name,
                     len(df),
                 )
+                if on_provider is not None:
+                    on_provider(name, len(df))
                 return df
             errors.append(f"{name}: empty dataframe")
         except NoMarketDataError as exc:

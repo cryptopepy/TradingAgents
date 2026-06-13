@@ -21,6 +21,11 @@ from tradingagents.backtest import (
 )
 from tradingagents.backtest.schemas import StrategyMetrics
 from cli.paper_trading import prompt_paper_options, run_paper_session
+from cli.activity_log import (
+    format_optimization_winner,
+    make_backtest_callbacks,
+    make_progress_logger,
+)
 
 console = Console()
 
@@ -130,6 +135,8 @@ def run_backtest_with_progress(
             f"Backtesting {len(strategies)} strategies on {ticker}…",
             total=total,
         )
+        log = make_progress_logger(progress)
+        on_start, on_complete, on_skipped = make_backtest_callbacks(log)
 
         def _advance(_metric: StrategyMetrics) -> None:
             progress.advance(task_id)
@@ -142,10 +149,20 @@ def run_backtest_with_progress(
             transaction_cost_pct=transaction_cost_pct,
             lookbacks=lookbacks,
             on_metric=_advance,
+            on_horizon_start=on_start,
+            on_horizon_complete=on_complete,
+            on_horizon_skipped=on_skipped,
             config=config,
         )
 
-    return require_optimization_results(result)
+    result = require_optimization_results(result)
+    if result.winner is not None:
+        console.print()
+        console.print(f"[green]{format_optimization_winner(result.winner)}[/green]")
+    for warning in result.warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
+
+    return result
 
 
 def prompt_custom_backtest_params() -> dict:

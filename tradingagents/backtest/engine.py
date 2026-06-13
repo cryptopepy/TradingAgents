@@ -262,8 +262,12 @@ def fetch_historical_crypto(
     force_refresh: bool = False,
     config: Optional[dict] = None,
     now: datetime | None = None,
+    on_fetch: Optional[Callable[[str, int, bool], None]] = None,
 ) -> pd.DataFrame:
-    """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks."""
+    """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks.
+
+    ``on_fetch`` receives ``(provider_label, bar_count, cache_hit)`` when data is loaded.
+    """
     ticker = _historic_ticker(symbol)
     granularity = lookback.granularity_seconds()
     end_dt, capped = _resolve_backtest_end_dt(end_date, now=now)
@@ -304,7 +308,10 @@ def fetch_historical_crypto(
             mask = (cached["Date"] >= pd.Timestamp(start_dt)) & (
                 cached["Date"] <= pd.Timestamp(end_dt)
             )
-            return cached.loc[mask].reset_index(drop=True)
+            sliced = cached.loc[mask].reset_index(drop=True)
+            if on_fetch is not None:
+                on_fetch("disk cache", len(sliced), True)
+            return sliced
         logger.info("Cache incomplete for %s — refetching", cache_file.name)
     elif not force_refresh and cache_file.exists():
         logger.debug(
@@ -313,6 +320,12 @@ def fetch_historical_crypto(
             ttl_seconds,
             capped,
         )
+    fetch_provider: dict[str, str | int] = {"name": "unknown", "bars": 0}
+
+    def _record_provider(name: str, bars: int) -> None:
+        fetch_provider["name"] = name
+        fetch_provider["bars"] = bars
+
     df = fetch_intraday_ohlcv(
         symbol,
         start_dt,
@@ -320,6 +333,7 @@ def fetch_historical_crypto(
         granularity,
         live_mode=is_live_mode(cfg),
         config=cfg,
+        on_provider=_record_provider,
     )
     df = _normalize_historic_df(df)
     if df.empty:
@@ -328,6 +342,8 @@ def fetch_historical_crypto(
             "Try a more recent end date, check network/API keys, or pass --live for ccxt fallback."
         )
     df.to_csv(cache_file, index=False)
+    if on_fetch is not None:
+        on_fetch(str(fetch_provider["name"]), len(df), False)
     return df
 
 
@@ -625,6 +641,11 @@ def optimize_strategies(
     transaction_cost_pct: float = 0.001,
     lookbacks: Optional[Sequence[LookbackWindow]] = None,
     on_metric: Optional[Callable[[StrategyMetrics], None]] = None,
+    on_horizon_start: Optional[Callable[[LookbackWindow], None]] = None,
+    on_horizon_complete: Optional[
+        Callable[[LookbackWindow, str, int, bool, List[StrategyMetrics]], None]
+    ] = None,
+    on_horizon_skipped: Optional[Callable[[LookbackWindow, str], None]] = None,
     config: Optional[dict] = None,
 ) -> OptimizationResult:
     """Run all strategies across 8h, 24h, and 7d horizons; pick the winner."""
@@ -638,23 +659,44 @@ def optimize_strategies(
     for idx, lookback in enumerate(windows):
         if idx:
             time.sleep(0.35)
+        if on_horizon_start is not None:
+            on_horizon_start(lookback)
+        fetch_meta = {"provider": "unknown", "bars": 0, "cache_hit": False}
+
+        def _on_fetch(provider: str, bars: int, cache_hit: bool) -> None:
+            fetch_meta["provider"] = provider
+            fetch_meta["bars"] = bars
+            fetch_meta["cache_hit"] = cache_hit
+
         try:
-            df = fetch_historical_crypto(symbol, end_date, lookback, config=cfg)
+            df = fetch_historical_crypto(
+                symbol,
+                end_date,
+                lookback,
+                config=cfg,
+                on_fetch=_on_fetch,
+            )
         except BacktestDataError as exc:
             msg = f"{lookback.value}: {exc}"
             logger.warning("%s", msg)
             warnings.append(msg)
+            if on_horizon_skipped is not None:
+                on_horizon_skipped(lookback, str(exc))
             continue
         except Exception as exc:
             msg = f"{lookback.value}: data fetch failed — {exc}"
             logger.warning("%s", msg, exc_info=logger.isEnabledFor(logging.DEBUG))
             warnings.append(msg)
+            if on_horizon_skipped is not None:
+                on_horizon_skipped(lookback, str(exc))
             continue
         if len(df) < 30:
-            warnings.append(
-                f"{lookback.value}: insufficient bars ({len(df)} < 30) for {symbol}"
-            )
+            skip_msg = f"insufficient bars ({len(df)} < 30) for {symbol}"
+            warnings.append(f"{lookback.value}: {skip_msg}")
+            if on_horizon_skipped is not None:
+                on_horizon_skipped(lookback, skip_msg)
             continue
+        horizon_metrics: List[StrategyMetrics] = []
         for strategy in strategies:
             result = run_strategy_on_frame(
                 df,
@@ -664,8 +706,17 @@ def optimize_strategies(
             )
             metric = _metrics_from_result(strategy, lookback, result)
             all_metrics.append(metric)
+            horizon_metrics.append(metric)
             if metric_callback is not None:
                 metric_callback(metric)
+        if on_horizon_complete is not None:
+            on_horizon_complete(
+                lookback,
+                fetch_meta["provider"],
+                fetch_meta["bars"] or len(df),
+                fetch_meta["cache_hit"],
+                horizon_metrics,
+            )
 
     winner_summary: Optional[WinningStrategySummary] = None
     if all_metrics:
