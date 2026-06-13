@@ -39,6 +39,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_WINNER_ON_GATE_FAIL": "winner_on_gate_fail",
     "TRADINGAGENTS_OPTIMIZE_RISK_PARAMS": "optimize_risk_params",
     "BACKTEST_PREFER_BINANCE": "backtest_prefer_binance",
+    "TRADINGAGENTS_OPTIMIZE_STRATEGY_PARAMS": "optimize_strategy_params",
+    "TRADINGAGENTS_PARAM_SEARCH_SAMPLES": "param_search_samples",
+    "TRADINGAGENTS_PARAM_SEARCH_MAX_RUNS": "param_search_max_runs",
+    "TRADINGAGENTS_WALK_FORWARD_ENABLED": "walk_forward_enabled",
+    "TRADINGAGENTS_WALK_FORWARD_VALIDATE_HOURS": "walk_forward_validate_hours",
 }
 
 
@@ -118,6 +123,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "optimize_risk_max_runs": 500,
     # Prefer Binance/ccxt before CryptoCompare for backtest OHLCV
     "backtest_prefer_binance": False,
+    # Per-strategy parameter search during optimization (off by default)
+    "optimize_strategy_params": False,
+    "param_search_samples": 20,
+    "param_search_max_runs": 600,
+    # Walk-forward validation: train on older slice, require validate hold-out to pass gates
+    "walk_forward_enabled": False,
+    "walk_forward_validate_hours": 8,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

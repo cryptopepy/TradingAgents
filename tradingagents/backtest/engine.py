@@ -27,10 +27,16 @@ from tradingagents.dataflows.symbol_utils import parse_crypto_pair
 from .historical_data import fetch_intraday_ohlcv
 from .matcher import SimulatedMatcher
 from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_to_intents
+from .param_search import param_candidates
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
 from .validation import BacktestDataError
-from .winner_gate import select_winner, winner_gate_from_config
+from .walk_forward import (
+    attach_walk_forward_fields,
+    split_walk_forward,
+    walk_forward_deployable,
+)
+from .winner_gate import select_winner, winner_gate_from_config, _risk_params_from_metric
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +270,7 @@ def fetch_historical_crypto(
     config: Optional[dict] = None,
     now: datetime | None = None,
     on_fetch: Optional[Callable[[str, int, bool], None]] = None,
+    extra_hours: float = 0.0,
 ) -> pd.DataFrame:
     """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks.
 
@@ -282,7 +289,7 @@ def fetch_historical_crypto(
                 floored.strftime("%Y-%m-%d %H:%M:%S"),
             )
             end_dt = floored
-    start_dt = end_dt - lookback.to_timedelta()
+    start_dt = end_dt - lookback.to_timedelta() - timedelta(hours=extra_hours)
     if end_dt <= start_dt:
         raise BacktestDataError(
             f"Not enough history yet today for {lookback.value} window — try yesterday or wait."
@@ -664,6 +671,50 @@ def run_strategy_backtest(
     return result
 
 
+def _metric_with_risk_params(
+    metric: StrategyMetrics,
+    sl: float,
+    tp: Optional[float],
+    cost: float,
+) -> StrategyMetrics:
+    params = dict(metric.parameters)
+    params["_stop_loss_pct"] = sl
+    params["_take_profit_pct"] = tp
+    params["_transaction_cost_pct"] = cost
+    return metric.model_copy(update={"parameters": params})
+
+
+def _evaluate_strategy_on_frame(
+    strategy_name: str,
+    df: pd.DataFrame,
+    lookback: LookbackWindow,
+    risk_sets: List[tuple[float, Optional[float], float]],
+    config: dict,
+) -> Optional[StrategyMetrics]:
+    """Best metric for one strategy across parameter and risk combos."""
+    best_metric: Optional[StrategyMetrics] = None
+    for params in param_candidates(strategy_name, config):
+        clean = {k: v for k, v in params.items() if not str(k).startswith("_")}
+        strategy = build_strategy(strategy_name, clean)
+        for sl, tp, cost in risk_sets:
+            result = run_strategy_on_frame(
+                df,
+                strategy,
+                stop_loss_pct=sl,
+                take_profit_pct=tp,
+                transaction_cost_pct=cost,
+            )
+            metric = _metric_with_risk_params(
+                _metrics_from_result(strategy, lookback, result),
+                sl,
+                tp,
+                cost,
+            )
+            if best_metric is None or metric.net_profit_ratio > best_metric.net_profit_ratio:
+                best_metric = metric
+    return best_metric
+
+
 def _metrics_from_result(
     strategy: Strategy,
     lookback: LookbackWindow,
@@ -709,6 +760,8 @@ def optimize_strategies(
     cfg = config or get_config()
     gate = winner_gate_from_config(cfg)
     risk_sets = _iter_risk_param_sets(cfg, stop_loss_pct, take_profit_pct, transaction_cost_pct)
+    walk_forward_enabled = bool(cfg.get("walk_forward_enabled"))
+    validate_hours = float(cfg.get("walk_forward_validate_hours", 8))
 
     for idx, lookback in enumerate(windows):
         if idx:
@@ -729,6 +782,7 @@ def optimize_strategies(
                 lookback,
                 config=cfg,
                 on_fetch=_on_fetch,
+                extra_hours=validate_hours if walk_forward_enabled else 0.0,
             )
         except BacktestDataError as exc:
             msg = f"{lookback.value}: {exc}"
@@ -750,30 +804,79 @@ def optimize_strategies(
             if on_horizon_skipped is not None:
                 on_horizon_skipped(lookback, skip_msg)
             continue
+        eval_df = df
+        val_df: Optional[pd.DataFrame] = None
+        if walk_forward_enabled:
+            try:
+                eval_df, val_df = split_walk_forward(
+                    df,
+                    validate_hours,
+                    lookback.granularity_seconds(),
+                )
+            except ValueError as exc:
+                skip_msg = f"walk-forward split failed — {exc}"
+                warnings.append(f"{lookback.value}: {skip_msg}")
+                if on_horizon_skipped is not None:
+                    on_horizon_skipped(lookback, skip_msg)
+                continue
+
         horizon_metrics: List[StrategyMetrics] = []
         for strategy in strategies:
-            best_metric: Optional[StrategyMetrics] = None
-            for sl, tp, cost in risk_sets:
-                result = run_strategy_on_frame(
-                    df,
-                    strategy,
+            best_train = _evaluate_strategy_on_frame(
+                strategy.name,
+                eval_df,
+                lookback,
+                risk_sets,
+                cfg,
+            )
+            if best_train is None:
+                continue
+
+            if walk_forward_enabled and val_df is not None:
+                sl, tp, cost = _risk_params_from_metric(
+                    best_train,
+                    stop_loss_pct=stop_loss_pct,
+                    take_profit_pct=take_profit_pct,
+                    transaction_cost_pct=transaction_cost_pct,
+                )
+                clean = {
+                    k: v
+                    for k, v in best_train.parameters.items()
+                    if not str(k).startswith("_")
+                }
+                val_strategy = build_strategy(strategy.name, clean)
+                val_result = run_strategy_on_frame(
+                    val_df,
+                    val_strategy,
                     stop_loss_pct=sl,
                     take_profit_pct=tp,
                     transaction_cost_pct=cost,
                 )
-                metric = _metrics_from_result(strategy, lookback, result)
-                params = dict(metric.parameters)
-                params["_stop_loss_pct"] = sl
-                params["_take_profit_pct"] = tp
-                params["_transaction_cost_pct"] = cost
-                metric = metric.model_copy(update={"parameters": params})
-                if best_metric is None or metric.net_profit_ratio > best_metric.net_profit_ratio:
-                    best_metric = metric
-            if best_metric is not None:
-                all_metrics.append(best_metric)
-                horizon_metrics.append(best_metric)
-                if metric_callback is not None:
-                    metric_callback(best_metric)
+                val_metric = _metric_with_risk_params(
+                    _metrics_from_result(val_strategy, lookback, val_result),
+                    sl,
+                    tp,
+                    cost,
+                )
+                wf_ok, wf_fail = walk_forward_deployable(best_train, val_metric, gate)
+                if not wf_ok:
+                    warnings.append(
+                        f"{strategy.name}/{lookback.value} walk-forward rejected: "
+                        + "; ".join(wf_fail)
+                    )
+                    continue
+                best_metric = attach_walk_forward_fields(
+                    best_train,
+                    train_metric=best_train,
+                    validate_metric=val_metric,
+                )
+            else:
+                best_metric = best_train
+
+            all_metrics.append(best_metric)
+            horizon_metrics.append(best_metric)
+            if metric_callback is not None:
+                metric_callback(best_metric)
         if on_horizon_complete is not None:
             on_horizon_complete(
                 lookback,

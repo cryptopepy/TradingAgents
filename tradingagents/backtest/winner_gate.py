@@ -88,6 +88,8 @@ def metrics_to_winner_summary(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         transaction_cost_pct=transaction_cost_pct,
+        train_profit_ratio=metric.train_net_profit_ratio,
+        validate_profit_ratio=metric.validate_net_profit_ratio,
     )
 
 

@@ -447,8 +447,8 @@ Users can improve behavior today without code changes:
 - [x] IMPROVE-4: Risk parameter sweep (opt-in via `TRADINGAGENTS_OPTIMIZE_RISK_PARAMS`)
 
 ### P2 — Validation & search
-- [ ] IMPROVE-5: Per-strategy parameter optimization
-- [ ] IMPROVE-6: Walk-forward validation
+- [x] IMPROVE-5: Per-strategy parameter optimization
+- [x] IMPROVE-6: Walk-forward validation
 
 ### P3 — Optional
 - [ ] IMPROVE-7: Sizing, cooldown, regime, 1m bars, composite score

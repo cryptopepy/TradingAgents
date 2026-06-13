@@ -136,3 +136,44 @@ def test_select_winner_picks_best_deployable():
     assert winner.deployable
     assert winner.stop_loss_pct == pytest.approx(0.015)
     assert winner.take_profit_pct == pytest.approx(0.03)
+
+
+def test_param_search_returns_multiple_candidates_when_enabled():
+    from tradingagents.backtest.param_search import param_candidates
+
+    cfg = {"optimize_strategy_params": True, "param_search_samples": 5}
+    candidates = param_candidates("rsi_mean_reversion", cfg)
+    assert len(candidates) >= 2
+    assert candidates[0] != candidates[1] or len(candidates) == 1
+
+
+def test_walk_forward_split_reserves_recent_bars():
+    from tradingagents.backtest.walk_forward import split_walk_forward
+
+    df = _trending_ohlcv(150)
+    train, validate = split_walk_forward(df, validate_hours=8, granularity_seconds=300)
+    assert len(validate) == 96
+    assert len(train) == 54
+
+
+def test_walk_forward_rejects_when_validate_fails_gate():
+    from tradingagents.backtest.walk_forward import walk_forward_deployable
+    from tradingagents.backtest.winner_gate import WinnerGateConfig
+
+    train = StrategyMetrics(
+        strategy_name="ema_crossover",
+        lookback="8h",
+        net_profit_ratio=0.05,
+        num_trades=5,
+        max_drawdown=0.05,
+    )
+    validate = StrategyMetrics(
+        strategy_name="ema_crossover",
+        lookback="8h",
+        net_profit_ratio=-0.02,
+        num_trades=4,
+        max_drawdown=0.08,
+    )
+    ok, failures = walk_forward_deployable(train, validate, WinnerGateConfig())
+    assert not ok
+    assert failures

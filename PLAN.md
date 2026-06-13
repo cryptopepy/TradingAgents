@@ -68,8 +68,8 @@ See **`PLAN-IMPROVE.md`** for the full implementation blueprint (backtest/paper 
 - [x] IMPROVE-2: Winner gating (min profit, min trades, max drawdown)
 - [x] IMPROVE-3: Unified spot price pipeline (`BACKTEST_PREFER_BINANCE`)
 - [x] IMPROVE-4: Risk parameter sweep in optimizer
-- [ ] IMPROVE-5: Per-strategy parameter optimization (opt-in)
-- [ ] IMPROVE-6: Walk-forward validation (opt-in)
+- [x] IMPROVE-5: Per-strategy parameter optimization (opt-in)
+- [x] IMPROVE-6: Walk-forward validation (opt-in)
 
 ## Epic: Multi-Phase Platform Refinement (v0.4.x)
 

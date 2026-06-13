@@ -20,6 +20,8 @@ class StrategyMetrics(BaseModel):
     num_trades: int = 0
     win_rate: float = 0.0
     notes: List[str] = Field(default_factory=list)
+    train_net_profit_ratio: Optional[float] = None
+    validate_net_profit_ratio: Optional[float] = None
 
 
 class WinningStrategySummary(BaseModel):
@@ -37,6 +39,8 @@ class WinningStrategySummary(BaseModel):
     stop_loss_pct: float = 0.02
     take_profit_pct: Optional[float] = None
     transaction_cost_pct: float = 0.001
+    train_profit_ratio: Optional[float] = None
+    validate_profit_ratio: Optional[float] = None
 
 
 class OptimizationResult(BaseModel):

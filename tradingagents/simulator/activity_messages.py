@@ -58,11 +58,17 @@ def format_optimization_winner(
     *,
     prefix: str = "Winner",
 ) -> str:
-    return (
+    base = (
         f"{prefix}: {winner.strategy_name} ({winner.lookback}) — "
         f"net {winner.historical_profit_ratio:+.2%}, "
         f"PF {winner.profit_factor:.2f}, Sharpe {winner.sharpe_ratio:.2f}"
     )
+    if winner.train_profit_ratio is not None and winner.validate_profit_ratio is not None:
+        return (
+            f"{base} | walk-forward train {winner.train_profit_ratio:+.2%} / "
+            f"validate {winner.validate_profit_ratio:+.2%}"
+        )
+    return base
 
 
 def format_drawdown_rebacktest_banner(drawdown_pct: float) -> str:
@@ -81,7 +87,7 @@ def format_tick_action(action: str, price: float, equity: float) -> str:
         "signal_exit": "Signal exit",
         "enter_long": "Enter LONG",
         "enter_short": "Enter SHORT",
-        "manual_close": "Manual close (c)",
+        "manual_close": "Close and retest (c)",
     }
     label = labels.get(action, action.replace("_", " ").title())
     return f"{label} @ ${price:,.4f} — equity ${equity:,.2f}"
