@@ -170,11 +170,16 @@ def _fetch_cryptocompare_ohlcv(
 _DEFAULT_CCXT_EXCHANGES = ("kraken", "coinbase", "binance")
 
 
-def _ccxt_exchange_ids() -> tuple[str, ...]:
+def ccxt_exchange_ids() -> tuple[str, ...]:
+    """ccxt exchange order for OHLCV and live spot (``BACKTEST_CCXT_EXCHANGES``)."""
     raw = os.environ.get("BACKTEST_CCXT_EXCHANGES", "").strip()
     if raw:
         return tuple(x.strip().lower() for x in raw.split(",") if x.strip())
     return _DEFAULT_CCXT_EXCHANGES
+
+
+def _ccxt_exchange_ids() -> tuple[str, ...]:
+    return ccxt_exchange_ids()
 
 
 def _ccxt_market_symbol(exchange, pair: CryptoPair) -> str | None:
@@ -280,6 +285,56 @@ def _fetch_ccxt_ohlcv(
             errors.append(f"{exchange_id}: {exc}")
     detail = "; ".join(errors) or "no ccxt exchange returned candles"
     raise NoMarketDataError(symbol, pair_display, detail)
+
+
+def fetch_ccxt_spot_ticker(
+    symbol: str,
+    exchange_id: str,
+) -> tuple[float, str]:
+    """Last trade price from one ccxt exchange. Returns (price, market_symbol)."""
+    try:
+        import ccxt
+    except ImportError as exc:
+        raise NoMarketDataError(
+            symbol,
+            parse_crypto_pair(symbol).display,
+            "ccxt not installed (pip install ccxt)",
+        ) from exc
+
+    pair = parse_crypto_pair(symbol)
+    if not hasattr(ccxt, exchange_id):
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"unknown ccxt exchange {exchange_id!r}",
+        )
+
+    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    exchange.load_markets()
+    market_symbol = _ccxt_market_symbol(exchange, pair)
+    if not market_symbol:
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"{exchange_id} has no market for {pair.display}",
+        )
+
+    ticker = exchange.fetch_ticker(market_symbol)
+    last = ticker.get("last")
+    if last is None:
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"{exchange_id} ticker has no last price for {market_symbol}",
+        )
+    price = float(last)
+    if price <= 0:
+        raise NoMarketDataError(
+            symbol,
+            pair.display,
+            f"{exchange_id} returned non-positive price for {market_symbol}",
+        )
+    return price, market_symbol
 
 
 def fetch_intraday_ohlcv(

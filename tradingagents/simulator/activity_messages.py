@@ -75,9 +75,33 @@ def format_drawdown_rebacktest_banner(drawdown_pct: float) -> str:
     return f"══ Drawdown review ({drawdown_pct:.2f}%) — re-running backtest ══"
 
 
-def format_price_feed(source: str, price: float, *, first: bool = False) -> str:
+def format_price_feed(
+    source: str,
+    price: float,
+    *,
+    endpoint: str | None = None,
+    failures: Sequence[str] | None = None,
+    first: bool = False,
+) -> str:
     label = "Price feed" if first else "Price source"
-    return f"{label}: {source} @ ${price:,.4f}"
+    line = f"{label}: {source} @ ${price:,.4f}"
+    if endpoint:
+        line += f" ({endpoint})"
+    if failures:
+        line += f" — skipped: {'; '.join(failures)}"
+    return line
+
+
+def format_vendor_failures(attempts: Sequence) -> list[str]:
+    """Compact failure lines from ``VendorAttempt`` tuples."""
+    failures: list[str] = []
+    for attempt in attempts:
+        if getattr(attempt, "ok", False):
+            continue
+        vendor = getattr(attempt, "vendor", "unknown")
+        detail = getattr(attempt, "detail", "") or "failed"
+        failures.append(f"{vendor}: {detail}")
+    return failures
 
 
 def format_tick_action(action: str, price: float, equity: float) -> str:

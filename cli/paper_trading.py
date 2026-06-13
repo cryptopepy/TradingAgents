@@ -42,6 +42,10 @@ def render_paper_state_table(state: PaperTradingState) -> Table:
     table.add_row("Strategy", f"{state.strategy_name} ({state.lookback})")
     table.add_row("Signal", state.signal)
     table.add_row("Price", f"${state.price:,.4f} ({state.price_source})")
+    if state.price_endpoint:
+        table.add_row("Price endpoint", state.price_endpoint)
+    if state.vendor_failures:
+        table.add_row("Skipped vendors", state.vendor_failures)
     table.add_row("Equity", f"${state.equity:,.2f}")
     table.add_row("Cash", f"${state.cash:,.2f}")
     pnl_style = "green" if state.pnl >= 0 else "red"

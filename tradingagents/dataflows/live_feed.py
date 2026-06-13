@@ -1,10 +1,13 @@
 """Unified live market feed router — spot prices, metadata, and intraday tickers.
 
-Vendor order for spot: CryptoCompare → CoinGecko → Binance (live_mode) → localized
-mock ticker anchored on the last known good price (mutates via DummyPriceFeed).
+Vendor order for spot: CryptoCompare → ccxt exchanges (Kraken/Coinbase/Binance)
+→ CoinGecko → localized mock ticker anchored on the last known good price.
+
+Exchange tickers are preferred over CoinGecko for paper fills — CoinGecko is an
+aggregator with slower updates and is kept as a fallback only.
 
 API keys: ``CRYPTOCOMPARE_API_KEY``, ``COINGECKO_API_KEY`` (also
-``TRADINGAGENTS_*`` aliases).
+``TRADINGAGENTS_*`` aliases). ccxt order: ``BACKTEST_CCXT_EXCHANGES``.
 """
 
 from __future__ import annotations
@@ -23,12 +26,29 @@ from tradingagents.dataflows.crypto_common import env_api_key
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.symbol_utils import parse_crypto_pair
 
+_CCXT_SOURCE_MAP = {
+    "kraken": "kraken",
+    "coinbase": "coinbase",
+    "binance": "binance",
+}
+
 
 class PriceSource(str, Enum):
     CRYPTOCOMPARE = "cryptocompare"
-    COINGECKO = "coingecko"
+    KRAKEN = "kraken"
+    COINBASE = "coinbase"
     BINANCE = "binance"
+    COINGECKO = "coingecko"
     PLACEHOLDER = "placeholder"
+
+
+@dataclass(frozen=True)
+class VendorAttempt:
+    """One vendor try during a spot price fetch."""
+
+    vendor: str
+    ok: bool
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -39,6 +59,8 @@ class LivePrice:
     price: float
     source: PriceSource
     timestamp: datetime
+    endpoint: str | None = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +102,11 @@ class LiveFeedRouter:
         self.credentials = LiveFeedCredentials()
         self._anchors: dict[str, float] = {}
         self._mock_feeds: dict[str, DummyPriceFeed] = {}
+        self._last_spot_attempts: list[VendorAttempt] = []
+
+    @property
+    def last_spot_attempts(self) -> tuple[VendorAttempt, ...]:
+        return tuple(self._last_spot_attempts)
 
     def _remember_anchor(self, symbol: str, price: float) -> None:
         if price > 0:
@@ -112,14 +139,26 @@ class LiveFeedRouter:
             price=price,
             source=PriceSource.PLACEHOLDER,
             timestamp=datetime.now(timezone.utc),
+            endpoint="localized mock (last anchor)",
         )
 
-    def _is_rate_or_network_error(self, exc: Exception) -> bool:
-        if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
-            return True
+    def _attempt_detail(self, exc: Exception) -> str:
         if isinstance(exc, requests.HTTPError) and exc.response is not None:
-            return exc.response.status_code in (429, 502, 503, 504)
-        return False
+            return f"HTTP {exc.response.status_code}"
+        text = str(exc).strip()
+        if len(text) > 120:
+            return text[:117] + "..."
+        return text or exc.__class__.__name__
+
+    def _record_attempt(self, attempts: list[VendorAttempt], vendor: str, ok: bool, detail: str = "") -> None:
+        attempts.append(VendorAttempt(vendor=vendor, ok=ok, detail=detail))
+
+    def _price_source_for_exchange(self, exchange_id: str) -> PriceSource:
+        label = _CCXT_SOURCE_MAP.get(exchange_id, exchange_id)
+        try:
+            return PriceSource(label)
+        except ValueError:
+            return PriceSource.BINANCE
 
     def fetch_spot(
         self,
@@ -127,50 +166,81 @@ class LiveFeedRouter:
         *,
         use_binance: bool | None = None,
     ) -> LivePrice:
-        """Spot price with vendor chain and localized mock on 429/network failure."""
+        """Spot price with vendor chain and localized mock when all vendors fail."""
+        from tradingagents.backtest.historical_data import ccxt_exchange_ids, fetch_ccxt_spot_ticker
         from tradingagents.dataflows.cryptocompare import fetch_spot_price as _fetch_cryptocompare_spot
         from tradingagents.dataflows.coingecko import get_simple_price as _fetch_coingecko_spot
-
-        def _fetch_binance_spot(sym: str) -> float | None:
-            try:
-                import ccxt
-
-                pair = parse_crypto_pair(sym)
-                exchange = ccxt.binance({"enableRateLimit": True})
-                ticker = exchange.fetch_ticker(pair.binance_symbol)
-                return float(ticker["last"])
-            except Exception:
-                return None
-        from tradingagents.backtest.engine import is_live_mode
+        from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
         now = datetime.now(timezone.utc)
-        vendors = (
-            (_fetch_cryptocompare_spot, PriceSource.CRYPTOCOMPARE),
-            (_fetch_coingecko_spot, PriceSource.COINGECKO),
-        )
-        for fetcher, source in vendors:
-            try:
-                price = fetcher(symbol)
-                if price is not None and price > 0:
-                    self._remember_anchor(symbol, price)
-                    return LivePrice(symbol=symbol, price=price, source=source, timestamp=now)
-            except Exception as exc:
-                if self._is_rate_or_network_error(exc):
-                    logger.warning("%s rate/network error for %s: %s", source.value, symbol, exc)
-                    return self._localized_mock_ticker(symbol)
-                logger.debug("%s fetch failed for %s: %s", source.value, symbol, exc)
+        attempts: list[VendorAttempt] = []
 
-        live_flag = use_binance if use_binance is not None else is_live_mode(self.config)
-        if live_flag:
-            try:
-                price = _fetch_binance_spot(symbol)
-                if price is not None and price > 0:
-                    self._remember_anchor(symbol, price)
-                    return LivePrice(symbol=symbol, price=price, source=PriceSource.BINANCE, timestamp=now)
-            except Exception as exc:
-                if self._is_rate_or_network_error(exc):
-                    return self._localized_mock_ticker(symbol)
+        # 1. CryptoCompare aggregate
+        try:
+            price = _fetch_cryptocompare_spot(symbol)
+            if price is not None and price > 0:
+                self._record_attempt(attempts, "cryptocompare", True, "min-api.cryptocompare.com/data/price")
+                self._remember_anchor(symbol, price)
+                self._last_spot_attempts = attempts
+                return LivePrice(
+                    symbol=symbol,
+                    price=price,
+                    source=PriceSource.CRYPTOCOMPARE,
+                    timestamp=now,
+                    endpoint="cryptocompare /data/price",
+                )
+            self._record_attempt(attempts, "cryptocompare", False, "no price returned")
+        except Exception as exc:
+            self._record_attempt(attempts, "cryptocompare", False, self._attempt_detail(exc))
 
+        # 2. ccxt exchange tickers (real-time; preferred over CoinGecko for paper)
+        exchange_ids = list(ccxt_exchange_ids())
+        if use_binance is False:
+            exchange_ids = [x for x in exchange_ids if x != "binance"]
+        for exchange_id in exchange_ids:
+            vendor_label = exchange_id
+            try:
+                price, market_symbol = fetch_ccxt_spot_ticker(symbol, exchange_id)
+                self._record_attempt(
+                    attempts,
+                    vendor_label,
+                    True,
+                    f"{exchange_id} {market_symbol} ticker",
+                )
+                self._remember_anchor(symbol, price)
+                self._last_spot_attempts = attempts
+                return LivePrice(
+                    symbol=symbol,
+                    price=price,
+                    source=self._price_source_for_exchange(exchange_id),
+                    timestamp=now,
+                    endpoint=f"{exchange_id} {market_symbol}",
+                )
+            except NoMarketDataError as exc:
+                self._record_attempt(attempts, vendor_label, False, exc.detail or str(exc))
+            except Exception as exc:
+                self._record_attempt(attempts, vendor_label, False, self._attempt_detail(exc))
+
+        # 3. CoinGecko aggregate (slower; metadata-friendly fallback)
+        try:
+            price = _fetch_coingecko_spot(symbol)
+            if price is not None and price > 0:
+                self._record_attempt(attempts, "coingecko", True, "api.coingecko.com simple/price")
+                self._remember_anchor(symbol, price)
+                self._last_spot_attempts = attempts
+                return LivePrice(
+                    symbol=symbol,
+                    price=price,
+                    source=PriceSource.COINGECKO,
+                    timestamp=now,
+                    endpoint="coingecko simple/price",
+                )
+            self._record_attempt(attempts, "coingecko", False, "no price returned")
+        except Exception as exc:
+            self._record_attempt(attempts, "coingecko", False, self._attempt_detail(exc))
+
+        self._record_attempt(attempts, "placeholder", False, "all vendors failed")
+        self._last_spot_attempts = attempts
         return self._localized_mock_ticker(symbol)
 
     def fetch_metadata(self, symbol: str) -> MarketMetadata:
@@ -237,7 +307,7 @@ class LiveFeedRouter:
                 headers=_headers(),
             )
         except Exception as exc:
-            if self._is_rate_or_network_error(exc):
+            if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
                 quote = self.fetch_spot(symbol)
                 now = datetime.now(timezone.utc)
                 return pd.DataFrame(

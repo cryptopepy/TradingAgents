@@ -10,18 +10,25 @@ from tradingagents.dataflows.live_feed import LiveFeedRouter, PriceSource
 
 @pytest.mark.unit
 class TestLiveFeedRouter:
-    def test_rate_limit_falls_back_to_localized_mock(self):
+    def test_rate_limit_continues_vendor_chain(self):
         router = LiveFeedRouter({})
         router._remember_anchor("BTC/USDT", 50_000.0)
 
         with patch(
             "tradingagents.dataflows.cryptocompare.fetch_spot_price",
             side_effect=requests.HTTPError(response=MagicMock(status_code=429)),
+        ), patch(
+            "tradingagents.backtest.historical_data.fetch_ccxt_spot_ticker",
+            side_effect=Exception("offline"),
+        ), patch(
+            "tradingagents.dataflows.coingecko.get_simple_price",
+            return_value=None,
         ):
             quote = router.fetch_spot("BTC/USDT")
 
         assert quote.source == PriceSource.PLACEHOLDER
         assert quote.price > 0
+        assert any(not a.ok and a.vendor == "cryptocompare" for a in router.last_spot_attempts)
 
     @patch("tradingagents.dataflows.coingecko._coingecko_get")
     @patch("tradingagents.dataflows.coingecko.resolve_coin_id", return_value="bitcoin")

@@ -19,7 +19,7 @@ from tradingagents.backtest.matcher import SimulatedMatcher
 from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
-from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price
+from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price, get_live_feed_router
 from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
 from tradingagents.simulator.core import (
     PaperTradingSession,
@@ -55,6 +55,8 @@ class PaperTradingState:
     price_source: str
     drawdown_pct: float
     rebacktest_count: int
+    price_endpoint: str = ""
+    vendor_failures: str = ""
     last_drawdown_review: str = "Never"
     effective_drawdown_window_minutes: float = 0.0
     open_position: Optional[str] = None
@@ -208,20 +210,34 @@ class PaperTradingEngine:
         if self.on_activity and message:
             self.on_activity(message)
 
+    def _vendor_failure_summary(self) -> str:
+        router = get_live_feed_router(self.config)
+        from tradingagents.simulator.activity_messages import format_vendor_failures
+
+        failures = format_vendor_failures(router.last_spot_attempts)
+        return "; ".join(failures[:4])
+
     def _log_price_feed(self, quote: LivePrice) -> None:
         source = quote.source.value
-        if self._price_feed_logged and source == self._last_logged_price_source:
+        failures = self._vendor_failure_summary()
+        source_key = f"{source}|{quote.endpoint or ''}|{failures}"
+        if self._price_feed_logged and source_key == getattr(self, "_last_price_feed_key", ""):
             return
-        from tradingagents.simulator.activity_messages import format_price_feed
+        from tradingagents.simulator.activity_messages import format_price_feed, format_vendor_failures
 
+        router = get_live_feed_router(self.config)
+        fail_lines = format_vendor_failures(router.last_spot_attempts)
         self._emit_activity(
             format_price_feed(
                 source,
                 quote.price,
+                endpoint=quote.endpoint,
+                failures=fail_lines or None,
                 first=not self._price_feed_logged,
             )
         )
         self._last_logged_price_source = source
+        self._last_price_feed_key = source_key
         self._price_feed_logged = True
 
     def _log_tick_action(self, result: TickEvaluationResult) -> None:
@@ -470,6 +486,8 @@ class PaperTradingEngine:
             price_source=quote.source.value,
             drawdown_pct=self._adaptive.current_drawdown_pct(),
             rebacktest_count=self._adaptive.rebacktest_count,
+            price_endpoint=quote.endpoint or "",
+            vendor_failures=self._vendor_failure_summary(),
             last_drawdown_review=format_last_drawdown_review(
                 self._adaptive.minutes_since_last_drawdown_review(now)
             ),

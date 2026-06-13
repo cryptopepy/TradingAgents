@@ -937,7 +937,7 @@ def is_live_mode(config: Optional[dict] = None) -> bool:
 
 
 def fetch_live_price(symbol: str, config: Optional[dict] = None) -> float:
-    """Fetch current price via live vendor chain (CryptoCompare → CoinGecko → Binance → placeholder)."""
+    """Fetch current price via live vendor chain (CryptoCompare → ccxt → CoinGecko → placeholder)."""
     from tradingagents.dataflows.live_prices import fetch_live_spot_price_value
 
     quote = fetch_live_spot_price_value(symbol, config)

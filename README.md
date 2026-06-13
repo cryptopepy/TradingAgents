@@ -164,8 +164,9 @@ Each price tick:
 
 | Mode | Mechanism |
 |------|-----------|
-| **Default** | CryptoCompare → CoinGecko → Binance (`live_feed.py`) |
-| **`LIVE_MODE=1` / `--live`** | ccxt Binance fallback for spot ticks |
+| **Default** | CryptoCompare → **ccxt** (Kraken/Coinbase/Binance) → CoinGecko (`live_feed.py`) |
+| **`BACKTEST_CCXT_EXCHANGES`** | Reorder ccxt for spot + OHLCV (e.g. `kraken,coinbase` skips geo-blocked Binance) |
+| **`LIVE_MODE=1` / `--live`** | Legacy flag; ccxt spot is always tried before CoinGecko |
 | **Resilient mock** | On 429/network errors, `dummy_feed` mutates from last anchor |
 
 ```bash

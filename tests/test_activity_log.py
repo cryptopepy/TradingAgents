@@ -60,9 +60,17 @@ class TestActivityMessages:
         assert "49,500" in line
         assert "9,850" in line
 
-    def test_format_price_feed(self):
-        assert "Price feed" in format_price_feed("cryptocompare", 50_000.0, first=True)
-        assert "Price source" in format_price_feed("coingecko", 50_000.0, first=False)
+    def test_format_price_feed_with_failures(self):
+        assert "Price feed" in format_price_feed("kraken", 50_000.0, first=True)
+        line = format_price_feed(
+            "kraken",
+            50_000.0,
+            endpoint="kraken BTC/USD",
+            failures=["cryptocompare: HTTP 429"],
+            first=True,
+        )
+        assert "kraken BTC/USD" in line
+        assert "cryptocompare" in line
 
 
 @pytest.mark.unit
