@@ -28,6 +28,7 @@ from .historical_data import fetch_intraday_ohlcv
 from .matcher import SimulatedMatcher
 from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_to_intents
 from .param_search import param_candidates
+from .signal_filters import prepare_strategy_signals, resolve_position_sizing_pct
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
 from .validation import BacktestDataError
@@ -476,6 +477,7 @@ def run_strategy_on_frame(
     stop_loss_pct: float = 0.02,
     take_profit_pct: Optional[float] = None,
     transaction_cost_pct: float = 0.001,
+    config: Optional[dict] = None,
 ) -> BacktestResult:
     """Simulate a strategy on a prepared OHLCV frame via VirtualPortfolio."""
     end_date = ""
@@ -494,8 +496,15 @@ def run_strategy_on_frame(
         )
 
     close = df["Close"].astype(float)
-    signals = strategy.generate_signals(df)
-    intents = signals_to_intents(df, symbol, signals)
+    cfg = config or {}
+    signals = prepare_strategy_signals(
+        df,
+        strategy.name,
+        strategy.generate_signals(df),
+        cfg,
+    )
+    sizing_pct = resolve_position_sizing_pct(df, cfg)
+    intents = signals_to_intents(df, symbol, signals, sizing_pct=sizing_pct)
     intent_by_bar = _index_intents_by_bar(df, intents)
     dates = df["Date"].dt.strftime("%Y-%m-%d %H:%M").tolist()
 
@@ -703,6 +712,7 @@ def _evaluate_strategy_on_frame(
                 stop_loss_pct=sl,
                 take_profit_pct=tp,
                 transaction_cost_pct=cost,
+                config=config,
             )
             metric = _metric_with_risk_params(
                 _metrics_from_result(strategy, lookback, result),
@@ -851,6 +861,7 @@ def optimize_strategies(
                     stop_loss_pct=sl,
                     take_profit_pct=tp,
                     transaction_cost_pct=cost,
+                    config=cfg,
                 )
                 val_metric = _metric_with_risk_params(
                     _metrics_from_result(val_strategy, lookback, val_result),
@@ -895,6 +906,7 @@ def optimize_strategies(
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
             transaction_cost_pct=transaction_cost_pct,
+            config=cfg,
         )
         if winner_summary is None and gate_failures:
             warnings.append(
@@ -950,7 +962,12 @@ def compute_strategy_signal(
     if df.empty:
         return "flat"
     strategy = build_strategy(strategy_name, parameters)
-    signals = strategy.generate_signals(df)
+    signals = prepare_strategy_signals(
+        df,
+        strategy_name,
+        strategy.generate_signals(df),
+        config or {},
+    )
     last = int(signals.iloc[-1]) if len(signals) else 0
     return {1: "long", -1: "short", 0: "flat"}.get(last, "flat")
 

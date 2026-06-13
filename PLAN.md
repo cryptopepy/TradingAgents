@@ -70,6 +70,7 @@ See **`PLAN-IMPROVE.md`** for the full implementation blueprint (backtest/paper 
 - [x] IMPROVE-4: Risk parameter sweep in optimizer
 - [x] IMPROVE-5: Per-strategy parameter optimization (opt-in)
 - [x] IMPROVE-6: Walk-forward validation (opt-in)
+- [x] IMPROVE-7: Cooldown, regime filter, sizing, composite score (1m bars deferred)
 
 ## Epic: Multi-Phase Platform Refinement (v0.4.x)
 

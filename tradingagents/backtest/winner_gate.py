@@ -28,6 +28,15 @@ def winner_gate_from_config(config: dict) -> WinnerGateConfig:
     )
 
 
+def metric_selection_score(metric: StrategyMetrics, config: dict) -> float:
+    """Ranking key for winner selection (higher is better)."""
+    mode = str(config.get("winner_score_mode", "net_profit")).strip().lower()
+    if mode == "composite":
+        pf = min(float(metric.profit_factor), 3.0)
+        return float(metric.net_profit_ratio) * pf / (1.0 + float(metric.max_drawdown))
+    return float(metric.net_profit_ratio)
+
+
 def evaluate_winner_gate(
     metric: StrategyMetrics,
     gate: WinnerGateConfig,
@@ -100,16 +109,20 @@ def select_winner(
     stop_loss_pct: float,
     take_profit_pct: Optional[float],
     transaction_cost_pct: float,
+    config: Optional[dict] = None,
 ) -> Tuple[Optional[WinningStrategySummary], List[str]]:
     """Pick best deployable metric or return rejection reasons for the best overall."""
+    cfg = config or {}
+    score = lambda m: metric_selection_score(m, cfg)
+
     if not metrics:
         return None, ["no strategy metrics evaluated"]
 
-    best_overall = max(metrics, key=lambda m: m.net_profit_ratio)
+    best_overall = max(metrics, key=score)
     eligible = [m for m in metrics if evaluate_winner_gate(m, gate)[0]]
 
     if eligible:
-        best = max(eligible, key=lambda m: m.net_profit_ratio)
+        best = max(eligible, key=score)
         sl, tp, cost = _risk_params_from_metric(
             best,
             stop_loss_pct=stop_loss_pct,

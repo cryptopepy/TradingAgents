@@ -44,6 +44,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PARAM_SEARCH_MAX_RUNS": "param_search_max_runs",
     "TRADINGAGENTS_WALK_FORWARD_ENABLED": "walk_forward_enabled",
     "TRADINGAGENTS_WALK_FORWARD_VALIDATE_HOURS": "walk_forward_validate_hours",
+    "TRADINGAGENTS_POSITION_SIZE_PCT": "position_size_pct",
+    "TRADINGAGENTS_ATR_POSITION_SIZING": "atr_position_sizing",
+    "TRADINGAGENTS_MIN_BARS_BETWEEN_TRADES": "min_bars_between_trades",
+    "TRADINGAGENTS_REGIME_FILTER_ENABLED": "regime_filter_enabled",
+    "TRADINGAGENTS_WINNER_SCORE_MODE": "winner_score_mode",
 }
 
 
@@ -130,6 +135,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Walk-forward validation: train on older slice, require validate hold-out to pass gates
     "walk_forward_enabled": False,
     "walk_forward_validate_hours": 8,
+    # Signal filters and sizing (off by default — preserves current behavior)
+    "position_size_pct": 1.0,
+    "atr_position_sizing": False,
+    "atr_target_pct": 0.02,
+    "min_bars_between_trades": 0,
+    "regime_filter_enabled": False,
+    "winner_score_mode": "net_profit",
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

@@ -151,6 +151,7 @@ class PaperTradingEngine:
             self.session.strategy_name,
             self.session.parameters,
             self.session.lookback,
+            config=self.config,
         )
         signal = StrategySignal.from_string(raw)
         self.session.signal = signal
@@ -270,6 +271,11 @@ class PaperTradingEngine:
             stop_loss_pct=self.session.stop_loss_pct,
             take_profit_pct=self.session.take_profit_pct,
             slippage_bps=self.session.slippage_bps,
+            sizing_pct=float(
+                self.session.position_size_pct
+                if self.session.position_size_pct != 1.0
+                else self.config.get("position_size_pct", 1.0)
+            ),
         )
         self._tick_history.append(result)
         self._log_tick_action(result)

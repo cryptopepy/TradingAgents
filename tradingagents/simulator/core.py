@@ -120,6 +120,7 @@ class PaperTradingSession(BaseModel):
     stop_loss_pct: float = 0.02
     take_profit_pct: Optional[float] = None
     slippage_bps: float = 10.0
+    position_size_pct: float = 1.0
     initial_equity: float = 1.0
 
 
@@ -200,6 +201,7 @@ def evaluate_live_market_tick(
     stop_loss_pct: float = 0.02,
     take_profit_pct: Optional[float] = None,
     slippage_bps: float = 10.0,
+    sizing_pct: float = 1.0,
 ) -> TickEvaluationResult:
     """Apply one market tick: stop-loss, take-profit, signal entry/exit, fees via matcher."""
     signal = StrategySignal.from_value(winning_strategy_signal)
@@ -254,7 +256,12 @@ def evaluate_live_market_tick(
                     reference_price=price,
                 )
             sim.submit_intent(
-                TransactionIntent(timestamp=now, asset=asset, direction=Direction.LONG),
+                TransactionIntent(
+                    timestamp=now,
+                    asset=asset,
+                    direction=Direction.LONG,
+                    sizing_pct=sizing_pct,
+                ),
                 reference_price=price,
             )
             action = "enter_long"
@@ -265,7 +272,12 @@ def evaluate_live_market_tick(
                     reference_price=price,
                 )
             sim.submit_intent(
-                TransactionIntent(timestamp=now, asset=asset, direction=Direction.SHORT),
+                TransactionIntent(
+                    timestamp=now,
+                    asset=asset,
+                    direction=Direction.SHORT,
+                    sizing_pct=sizing_pct,
+                ),
                 reference_price=price,
             )
             action = "enter_short"
