@@ -133,7 +133,7 @@ Registry: `STRATEGY_REGISTRY` in `tradingagents/backtest/strategies.py`.
 
 ### Optimization loop
 
-For each strategy × lookback (**8h**, **24h**, **7d**): backtest on window ending at analysis date → score by net profit ratio → report profit factor, Sharpe, max drawdown. Programmatic: `optimize_strategies()` → `deploy_winning_strategy()` → `format_optimization_summary()`.
+For each strategy × lookback (**8h**, **24h**, **7d**): backtest on window ending at analysis date → score by net profit ratio (or composite score when enabled) → **winner gating** rejects unprofitable or thin results before deploy. Programmatic: `optimize_strategies()` → `deploy_winning_strategy()` → `format_optimization_summary()`.
 
 ---
 
@@ -179,7 +179,9 @@ When `paper_adaptive_enabled` is on, sustained drawdown triggers `optimize_strat
 
 `[AUTONOMOUS ROTATION]: Strategy changed from [Old] to [New] due to threshold violation.`
 
-Thresholds via post-analysis paper prompts or env (`TRADINGAGENTS_MAX_ALLOWED_DRAWDOWN_PCT`, `TRADINGAGENTS_DRAWDOWN_TIME_WINDOW`).
+Thresholds via post-analysis paper prompts or env (`TRADINGAGENTS_MAX_ALLOWED_DRAWDOWN_PCT`, `TRADINGAGENTS_DRAWDOWN_TIME_WINDOW`, `TRADINGAGENTS_DRAWDOWN_MAX_LOOKBACK_MINUTES`).
+
+Live session controls: **`(c)` Close and reassess** (close position, re-run optimization), **`(q)`** quit. Activity log shows per-horizon backtest results and price provider.
 
 ### Python API
 
@@ -263,6 +265,30 @@ TRADINGAGENTS_DRAWDOWN_TIME_WINDOW=60
 TRADINGAGENTS_TEMPERATURE=0.0
 ```
 
+### Backtest, paper & optimizer flags (opt-in)
+
+Defaults preserve prior behavior (full position size, no cooldown, net-profit winner). See `.env.example` and [`PLAN-IMPROVE.md`](PLAN-IMPROVE.md).
+
+| Flag | Purpose |
+|------|---------|
+| `BACKTEST_CCXT_EXCHANGES` | ccxt order when OHLCV vendors fail (e.g. `kraken,coinbase`) |
+| `BACKTEST_CACHE_TTL_SECONDS` | OHLCV disk cache TTL |
+| `BACKTEST_PREFER_BINANCE` | Binance/ccxt before CryptoCompare for backtest candles |
+| `TRADINGAGENTS_WINNER_GATE_ENABLED` | Require min profit, trades, max drawdown before auto-deploy |
+| `TRADINGAGENTS_WINNER_MIN_NET_PROFIT` | Min net return to deploy (default `0`) |
+| `TRADINGAGENTS_WINNER_MIN_TRADES` | Min trades per candidate (default `3`) |
+| `TRADINGAGENTS_WINNER_MAX_DRAWDOWN_PCT` | Max drawdown cap (default `0.15`) |
+| `TRADINGAGENTS_WINNER_ON_GATE_FAIL` | On adaptive re-backtest gate fail: `keep` or `flat` |
+| `TRADINGAGENTS_WINNER_SCORE_MODE` | `net_profit` (default) or `composite` |
+| `TRADINGAGENTS_OPTIMIZE_RISK_PARAMS` | Sweep SL/TP/fees during optimization |
+| `TRADINGAGENTS_OPTIMIZE_STRATEGY_PARAMS` | Random per-strategy parameter search |
+| `TRADINGAGENTS_WALK_FORWARD_ENABLED` | Train/validate hold-out before deploy |
+| `TRADINGAGENTS_WALK_FORWARD_VALIDATE_HOURS` | Validate window size (default `8`) |
+| `TRADINGAGENTS_MIN_BARS_BETWEEN_TRADES` | Cooldown bars after exit/flip (default `0`) |
+| `TRADINGAGENTS_REGIME_FILTER_ENABLED` | ADX regime gate on mean-revert vs trend strategies |
+| `TRADINGAGENTS_POSITION_SIZE_PCT` | Fraction of equity per trade (default `1.0`) |
+| `TRADINGAGENTS_ATR_POSITION_SIZING` | Scale size inversely with ATR volatility |
+
 ### Crypto data keys (optional)
 
 `COINGECKO_API_KEY`, `LUNARCRUSH_API_KEY`, `CRYPTOCOMPARE_API_KEY` — Binance public endpoints need no key.
@@ -285,7 +311,7 @@ LLM runs are non-deterministic (sampling, reasoning models, live news). Lower `T
 
 ## Contributing
 
-Bug fixes, docs, and features welcome. See [`CHANGELOG.md`](CHANGELOG.md) and [`PLAN.md`](PLAN.md).
+Bug fixes, docs, and features welcome. See [`CHANGELOG.md`](CHANGELOG.md), [`PLAN.md`](PLAN.md), and [`PLAN-IMPROVE.md`](PLAN-IMPROVE.md).
 
 ## Citation
 
