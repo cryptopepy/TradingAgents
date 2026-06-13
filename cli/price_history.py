@@ -72,6 +72,13 @@ class PriceHistoryLog:
     def session_low(self) -> Optional[float]:
         return self._session_low
 
+    def reset(self) -> None:
+        """Clear samples when switching symbols."""
+        self._samples.clear()
+        self._last_price = None
+        self._session_high = None
+        self._session_low = None
+
     def render_panel(self, *, title: str = "Price ticks") -> Panel:
         if not self._samples:
             body = Text("Waiting for ticks…", style="dim italic")

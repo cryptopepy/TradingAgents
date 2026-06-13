@@ -30,7 +30,7 @@ TREND_STRATEGIES = frozenset(
 )
 
 
-def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
     close = df["Close"].astype(float)
@@ -44,6 +44,9 @@ def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         axis=1,
     ).max(axis=1)
     return tr.rolling(period).mean()
+
+
+_compute_atr = compute_atr  # legacy alias
 
 
 def resolve_position_sizing_pct(df: pd.DataFrame, config: dict) -> float:
@@ -115,13 +118,42 @@ def apply_trade_cooldown(signals: pd.Series, min_bars: int) -> pd.Series:
     return out
 
 
+def apply_min_edge_filter(
+    df: pd.DataFrame,
+    signals: pd.Series,
+    config: dict,
+) -> pd.Series:
+    """Skip entries when expected ATR move is below fee round-trip × multiplier."""
+    if not config.get("min_edge_filter_enabled"):
+        return signals
+
+    mult = float(config.get("min_edge_fee_multiple", 3.0))
+    cost = float(config.get("_transaction_cost_pct", config.get("transaction_cost_pct", 0.001)))
+    min_move = mult * 2.0 * cost
+    period = int(config.get("atr_period", 14))
+    atr = compute_atr(df, period)
+    close = df["Close"].astype(float)
+    out = signals.copy()
+    for i in range(len(out)):
+        target = int(out.iloc[i]) if pd.notna(out.iloc[i]) else 0
+        if target == 0:
+            continue
+        price = float(close.iloc[i])
+        atr_val = float(atr.iloc[i]) if i < len(atr) else float("nan")
+        if price <= 0 or pd.isna(atr_val):
+            continue
+        if (atr_val / price) < min_move:
+            out.iloc[i] = 0
+    return out
+
+
 def prepare_strategy_signals(
     df: pd.DataFrame,
     strategy_name: str,
     signals: pd.Series,
     config: Optional[dict] = None,
 ) -> pd.Series:
-    """Apply regime filter and trade cooldown (no-op when disabled)."""
+    """Apply regime filter, min-edge gate, and trade cooldown."""
     cfg = config or {}
     filtered = apply_regime_filter(
         df,
@@ -129,6 +161,7 @@ def prepare_strategy_signals(
         strategy_name,
         enabled=bool(cfg.get("regime_filter_enabled")),
     )
+    filtered = apply_min_edge_filter(df, filtered, cfg)
     return apply_trade_cooldown(
         filtered,
         int(cfg.get("min_bars_between_trades", 0)),

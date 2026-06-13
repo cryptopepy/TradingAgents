@@ -7,7 +7,8 @@ import pytest
 from rich.console import Console
 
 from cli.keyboard_input import poll_stdin_key
-from cli.paper_trading import PAPER_CONTROLS_TEXT, render_paper_live_display
+from cli.paper_display import PaperDisplayContext
+from cli.paper_trading import MOVERS_CONTROLS_TEXT, PAPER_CONTROLS_TEXT, render_paper_live_display
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource
 from tradingagents.simulator import PaperTradingEngine, PaperTradingSession, StrategySignal
 from tradingagents.simulator.core import _sleep_until_stopped_or_key
@@ -48,12 +49,61 @@ class TestPaperControlsDisplay:
         Console(file=buffer, width=120).print(render_paper_live_display(state))
         rendered = buffer.getvalue()
         assert PAPER_CONTROLS_TEXT in rendered
+        assert "(m) movers" in rendered
         assert "(c)" in rendered
-        assert "Close position and retest" in rendered
         assert "(r)" in rendered
-        assert "Reanalyze" in rendered
         assert "(q)" in rendered
         assert "Ctrl+C" not in rendered
+
+    def test_movers_overlay_shows_movers_controls(self):
+        from datetime import datetime, timezone
+
+        from cli.movers_board import MoversBoard
+        from tradingagents.dataflows.market_movers import MarketMover, MoversSnapshot
+        from tradingagents.simulator.paper_engine import PaperTradingState
+
+        state = PaperTradingState(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            lookback="24h",
+            signal="flat",
+            equity=10_000.0,
+            cash=10_000.0,
+            initial_equity=10_000.0,
+            pnl=0.0,
+            pnl_pct=0.0,
+            price=50_000.0,
+            price_source="placeholder",
+            drawdown_pct=0.0,
+            rebacktest_count=0,
+            timestamp=datetime.now(timezone.utc),
+        )
+        board = MoversBoard({})
+        board._snapshot = MoversSnapshot(
+            gainers=(
+                MarketMover(
+                    rank=1,
+                    symbol="BTC",
+                    pair="BTC/USDT",
+                    name="BTC",
+                    change_pct=1.2,
+                    volume_usd=1_000_000.0,
+                    price_usd=50_000.0,
+                    side="gainer",
+                ),
+            ),
+            losers=(),
+            fetched_at=datetime.now(timezone.utc),
+            source="kraken",
+        )
+        ctx = PaperDisplayContext(show_movers=True)
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(
+            render_paper_live_display(state, display_ctx=ctx, movers_board=board)
+        )
+        rendered = buffer.getvalue()
+        assert MOVERS_CONTROLS_TEXT in rendered
+        assert "Kraken movers" in rendered
 
 
 @pytest.mark.unit

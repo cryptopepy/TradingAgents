@@ -27,7 +27,9 @@ from tradingagents.dataflows.symbol_utils import parse_crypto_pair
 from .historical_data import fetch_intraday_ohlcv
 from .matcher import SimulatedMatcher
 from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_to_intents
+from .optimization_profile import enrich_optimization_config, is_alt_symbol
 from .param_search import param_candidates
+from .risk_variants import RiskVariant, resolve_position_stop_pcts, risk_variant_from_metric
 from .signal_filters import prepare_strategy_signals, resolve_position_sizing_pct
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
@@ -106,6 +108,8 @@ class BacktestResult:
     net_profit_ratio: float = 0.0
     trades: List[TradeRecord] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    effective_stop_loss_pct: Optional[float] = None
+    effective_take_profit_pct: Optional[float] = None
 
 
 def _historic_ticker(symbol: str) -> str:
@@ -401,23 +405,23 @@ def _resolve_take_profit_pct(
     return stop_loss_pct * 2.0
 
 
-def _iter_risk_param_sets(
+def _risk_variants_for_optimization(
     config: dict,
+    symbol: str,
     stop_loss_pct: float,
     take_profit_pct: Optional[float],
     transaction_cost_pct: float,
-) -> List[tuple[float, Optional[float], float]]:
-    """Yield (stop_loss, take_profit, transaction_cost) combos for optimization."""
-    if not config.get("optimize_risk_params"):
-        return [(stop_loss_pct, take_profit_pct, transaction_cost_pct)]
+) -> List[RiskVariant]:
+    from .risk_variants import iter_risk_variants
 
-    combos: List[tuple[float, Optional[float], float]] = []
-    for sl in (0.01, 0.015, 0.02):
-        for tp_mult in (2.0, 3.0):
-            for cost in (0.001, 0.002):
-                combos.append((sl, sl * tp_mult, cost))
-    max_runs = int(config.get("optimize_risk_max_runs", 500))
-    return combos[:max_runs]
+    return iter_risk_variants(
+        config,
+        symbol=symbol,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        transaction_cost_pct=transaction_cost_pct,
+        is_alt=is_alt_symbol(symbol),
+    )
 
 
 def _compute_drawdown(equity_curve: pd.Series) -> float:
@@ -499,6 +503,7 @@ def run_strategy_on_frame(
     take_profit_pct: Optional[float] = None,
     transaction_cost_pct: float = 0.001,
     config: Optional[dict] = None,
+    risk_variant: Optional[RiskVariant] = None,
 ) -> BacktestResult:
     """Simulate a strategy on a prepared OHLCV frame via VirtualPortfolio."""
     end_date = ""
@@ -517,7 +522,14 @@ def run_strategy_on_frame(
         )
 
     close = df["Close"].astype(float)
-    cfg = config or {}
+    cfg = dict(config or {})
+    cfg["_transaction_cost_pct"] = transaction_cost_pct
+    variant = risk_variant or RiskVariant(
+        stop_loss_pct,
+        take_profit_pct,
+        transaction_cost_pct,
+        atr_stops=bool(cfg.get("atr_stops_enabled", False)),
+    )
     signals = prepare_strategy_signals(
         df,
         strategy.name,
@@ -537,10 +549,13 @@ def run_strategy_on_frame(
     position = 0
     entry_price = 0.0
     entry_idx = 0
+    active_sl_pct = variant.stop_loss_pct
+    active_tp_pct = _resolve_take_profit_pct(variant.take_profit_pct, variant.stop_loss_pct)
+    effective_stops: List[float] = []
+    effective_tps: List[float] = []
     trades: List[TradeRecord] = []
     equity_points: List[float] = [matcher.portfolio.equity]
     bar_returns: List[float] = []
-    resolved_tp = _resolve_take_profit_pct(take_profit_pct, stop_loss_pct)
 
     for i in range(1, len(df)):
         price = float(close.iloc[i])
@@ -552,7 +567,7 @@ def run_strategy_on_frame(
             move = (price - entry_price) / entry_price
             if position < 0:
                 move = -move
-            if move <= -stop_loss_pct:
+            if move <= -active_sl_pct:
                 _submit_exit(matcher, symbol, ts, price)
                 _record_exit_trade(
                     trades,
@@ -572,7 +587,7 @@ def run_strategy_on_frame(
                 )
                 equity_points.append(matcher.portfolio.equity)
                 continue
-            if move > 0 and move >= resolved_tp:
+            if move > 0 and move >= active_tp_pct:
                 _submit_exit(matcher, symbol, ts, price)
                 _record_exit_trade(
                     trades,
@@ -613,10 +628,20 @@ def run_strategy_on_frame(
                 position = 1
                 entry_price = price
                 entry_idx = i
+                active_sl_pct, active_tp_pct = resolve_position_stop_pcts(
+                    df, i, price, variant, cfg
+                )
+                effective_stops.append(active_sl_pct)
+                effective_tps.append(active_tp_pct)
             elif intent.direction == Direction.SHORT:
                 position = -1
                 entry_price = price
                 entry_idx = i
+                active_sl_pct, active_tp_pct = resolve_position_stop_pcts(
+                    df, i, price, variant, cfg
+                )
+                effective_stops.append(active_sl_pct)
+                effective_tps.append(active_tp_pct)
             matcher.submit_intent(intent, reference_price=price)
 
         matcher.mark_to_market({symbol: price})
@@ -655,6 +680,9 @@ def run_strategy_on_frame(
     sharpe = _compute_sharpe(pd.Series(bar_returns), _CRYPTO_PERIODS_PER_YEAR)
     max_dd = _compute_drawdown(pd.Series(equity_points))
 
+    eff_sl = float(np.median(effective_stops)) if effective_stops else variant.stop_loss_pct
+    eff_tp = float(np.median(effective_tps)) if effective_tps else active_tp_pct
+
     return BacktestResult(
         symbol=symbol,
         end_date=end_date,
@@ -668,6 +696,8 @@ def run_strategy_on_frame(
         net_profit_ratio=net_profit_ratio,
         trades=trades,
         notes=notes,
+        effective_stop_loss_pct=eff_sl,
+        effective_take_profit_pct=eff_tp,
     )
 
 
@@ -703,14 +733,20 @@ def run_strategy_backtest(
 
 def _metric_with_risk_params(
     metric: StrategyMetrics,
-    sl: float,
-    tp: Optional[float],
-    cost: float,
+    variant: RiskVariant,
+    result: BacktestResult,
 ) -> StrategyMetrics:
     params = dict(metric.parameters)
-    params["_stop_loss_pct"] = sl
-    params["_take_profit_pct"] = tp
-    params["_transaction_cost_pct"] = cost
+    eff_sl = result.effective_stop_loss_pct if result.effective_stop_loss_pct is not None else variant.stop_loss_pct
+    eff_tp = result.effective_take_profit_pct
+    if eff_tp is None:
+        eff_tp = variant.take_profit_pct
+    params["_stop_loss_pct"] = eff_sl
+    params["_take_profit_pct"] = eff_tp
+    params["_transaction_cost_pct"] = variant.transaction_cost_pct
+    params["_atr_stops_enabled"] = variant.atr_stops
+    params["_atr_sl_mult"] = variant.atr_sl_mult
+    params["_atr_tp_mult"] = variant.atr_tp_mult
     return metric.model_copy(update={"parameters": params})
 
 
@@ -718,7 +754,7 @@ def _evaluate_strategy_on_frame(
     strategy_name: str,
     df: pd.DataFrame,
     lookback: LookbackWindow,
-    risk_sets: List[tuple[float, Optional[float], float]],
+    risk_variants: List[RiskVariant],
     config: dict,
 ) -> Optional[StrategyMetrics]:
     """Best metric for one strategy across parameter and risk combos."""
@@ -726,20 +762,20 @@ def _evaluate_strategy_on_frame(
     for params in param_candidates(strategy_name, config):
         clean = {k: v for k, v in params.items() if not str(k).startswith("_")}
         strategy = build_strategy(strategy_name, clean)
-        for sl, tp, cost in risk_sets:
+        for variant in risk_variants:
             result = run_strategy_on_frame(
                 df,
                 strategy,
-                stop_loss_pct=sl,
-                take_profit_pct=tp,
-                transaction_cost_pct=cost,
+                stop_loss_pct=variant.stop_loss_pct,
+                take_profit_pct=variant.take_profit_pct,
+                transaction_cost_pct=variant.transaction_cost_pct,
                 config=config,
+                risk_variant=variant,
             )
             metric = _metric_with_risk_params(
                 _metrics_from_result(strategy, lookback, result),
-                sl,
-                tp,
-                cost,
+                variant,
+                result,
             )
             if best_metric is None or metric.net_profit_ratio > best_metric.net_profit_ratio:
                 best_metric = metric
@@ -791,9 +827,11 @@ def optimize_strategies(
     all_metrics: List[StrategyMetrics] = []
     warnings: List[str] = []
     metric_callback: Optional[Callable[[StrategyMetrics], None]] = on_metric
-    cfg = config or get_config()
+    cfg = enrich_optimization_config(config or get_config(), symbol)
     gate = winner_gate_from_config(cfg)
-    risk_sets = _iter_risk_param_sets(cfg, stop_loss_pct, take_profit_pct, transaction_cost_pct)
+    risk_variants = _risk_variants_for_optimization(
+        cfg, symbol, stop_loss_pct, take_profit_pct, transaction_cost_pct
+    )
     walk_forward_enabled = bool(cfg.get("walk_forward_enabled"))
     validate_hours = float(cfg.get("walk_forward_validate_hours", 8))
 
@@ -865,13 +903,19 @@ def optimize_strategies(
                 strategy.name,
                 eval_df,
                 lookback,
-                risk_sets,
+                risk_variants,
                 cfg,
             )
             if best_train is None:
                 continue
 
             if walk_forward_enabled and val_df is not None:
+                variant = risk_variant_from_metric(
+                    best_train,
+                    stop_loss_pct=stop_loss_pct,
+                    take_profit_pct=take_profit_pct,
+                    transaction_cost_pct=transaction_cost_pct,
+                )
                 sl, tp, cost = _risk_params_from_metric(
                     best_train,
                     stop_loss_pct=stop_loss_pct,
@@ -891,12 +935,12 @@ def optimize_strategies(
                     take_profit_pct=tp,
                     transaction_cost_pct=cost,
                     config=cfg,
+                    risk_variant=variant,
                 )
                 val_metric = _metric_with_risk_params(
                     _metrics_from_result(val_strategy, lookback, val_result),
-                    sl,
-                    tp,
-                    cost,
+                    variant,
+                    val_result,
                 )
                 wf_ok, wf_fail = walk_forward_deployable(best_train, val_metric, gate)
                 if not wf_ok:

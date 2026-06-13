@@ -256,6 +256,10 @@ def _fetch_ccxt_ohlcv_from_exchange(
         )
 
     exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    if exchange_id == "kraken":
+        from tradingagents.dataflows.kraken import kraken_ccxt_config
+
+        exchange = ccxt.kraken(kraken_ccxt_config())
     exchange.load_markets()
     market_symbol = _ccxt_market_symbol(exchange, pair)
     if not market_symbol:
@@ -353,6 +357,10 @@ def fetch_ccxt_spot_ticker(
         )
 
     exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    if exchange_id == "kraken":
+        from tradingagents.dataflows.kraken import kraken_ccxt_config
+
+        exchange = ccxt.kraken(kraken_ccxt_config())
     exchange.load_markets()
     market_symbol = _ccxt_market_symbol(exchange, pair)
     if not market_symbol:

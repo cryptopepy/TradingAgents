@@ -472,13 +472,17 @@ class PaperTradingEngine:
         on_start, on_complete, on_skipped, on_provider = self._make_horizon_callbacks()
 
         try:
+            from tradingagents.dataflows.trading_fees import paper_transaction_cost_pct
+
             optimization = optimize_strategies(
                 self.session.symbol,
                 end_date,
                 config=self.config,
                 stop_loss_pct=self.session.stop_loss_pct,
                 take_profit_pct=self.session.take_profit_pct,
-                transaction_cost_pct=self.session.slippage_bps / 10_000.0,
+                transaction_cost_pct=paper_transaction_cost_pct(
+                    self.session.symbol, self.config
+                ),
                 on_horizon_start=on_start,
                 on_horizon_complete=on_complete,
                 on_horizon_skipped=on_skipped,

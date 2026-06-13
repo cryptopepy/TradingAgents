@@ -19,6 +19,7 @@ from cli.activity_log import (
     make_backtest_callbacks,
 )
 from cli.keyboard_input import cbreak_stdin, poll_stdin_key
+from cli.movers_board import MoversBoard
 from cli.paper_display import PaperDisplayContext, render_market_panel
 from cli.price_history import PriceHistoryLog
 from tradingagents.simulator.activity_messages import (
@@ -32,11 +33,16 @@ from tradingagents.backtest import (
     require_optimization_results,
 )
 from tradingagents.simulator import PaperTradingEngine, PaperTradingState, session_from_optimization
+from tradingagents.dataflows.kraken import kraken_status_summary
+from tradingagents.dataflows.trading_fees import paper_fee_bps, paper_transaction_cost_pct
 
 console = Console()
 
 PAPER_CONTROLS_TEXT = (
-    "Controls: (c) Close position and retest · (r) Reanalyze · (q) quit"
+    "(m) movers · (c) close & retest · (r) reanalyze · (q) quit"
+)
+MOVERS_CONTROLS_TEXT = (
+    "(1–9) switch pair · (s) refresh · (m/esc) close movers"
 )
 
 
@@ -83,14 +89,18 @@ def render_paper_live_display(
     log: Optional[ActivityLog] = None,
     price_history: Optional[PriceHistoryLog] = None,
     display_ctx: Optional[PaperDisplayContext] = None,
+    movers_board: Optional[MoversBoard] = None,
 ) -> Group:
-    """Rich live view: activity log, status + market + price history, controls."""
-    controls = Text(PAPER_CONTROLS_TEXT, style="dim")
+    """Rich live view: activity log, status + market + price history, optional movers overlay."""
+    ctx = display_ctx or PaperDisplayContext()
+    controls = Text(
+        MOVERS_CONTROLS_TEXT if ctx.show_movers else PAPER_CONTROLS_TEXT,
+        style="dim",
+    )
     parts = []
     if log is not None and log.enabled:
         parts.append(log.render_panel())
 
-    ctx = display_ctx or PaperDisplayContext()
     market_panel = render_market_panel(
         state,
         ctx,
@@ -98,8 +108,16 @@ def render_paper_live_display(
         session_low=price_history.session_low if price_history else None,
     )
 
-    if price_history is not None:
-        # Columns (not Layout) — Layout split_row draws full-height dividers in Live.
+    if ctx.show_movers and movers_board is not None:
+        parts.append(
+            Columns(
+                [render_paper_portfolio_panel(state), market_panel],
+                expand=True,
+                equal=False,
+            )
+        )
+        parts.append(movers_board.render_panel(active_pair=state.symbol))
+    elif price_history is not None:
         parts.append(
             Columns(
                 [
@@ -156,7 +174,7 @@ def _run_initial_backtest(
     on_start, on_complete, on_skipped, on_provider_attempt = make_backtest_callbacks(log)
     sl = float(cfg.get("paper_stop_loss_pct", 0.02))
     tp_raw = cfg.get("paper_take_profit_pct")
-    transaction_cost_pct = 10.0 / 10_000.0
+    transaction_cost_pct = paper_transaction_cost_pct(ticker, cfg)
     optimization = require_optimization_results(
         optimize_strategies(
             ticker,
@@ -205,6 +223,8 @@ def run_paper_session(
     adaptive_on = adaptive if adaptive is not None else bool(cfg.get("paper_adaptive_enabled", True))
     use_live_log = is_live_display_tty()
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
+    current_ticker = ticker
+    movers_board = MoversBoard(cfg)
 
     def _echo(message: str) -> None:
         if not use_live_log:
@@ -214,7 +234,10 @@ def run_paper_session(
     latest_state: Optional[PaperTradingState] = None
     live: Optional[Live] = None
     price_history = PriceHistoryLog()
-    display_ctx = PaperDisplayContext(tick_interval=interval)
+    display_ctx = PaperDisplayContext(
+        tick_interval=interval,
+        kraken_status=kraken_status_summary(),
+    )
     loop_clock: dict = {"next_tick_at": time.monotonic() + interval}
 
     def _record_price(state: PaperTradingState) -> None:
@@ -228,7 +251,12 @@ def run_paper_session(
         if target is not None and live is not None:
             remaining = loop_clock["next_tick_at"] - time.monotonic()
             display_ctx.seconds_until_next = max(0.0, remaining)
-            live.update(render_paper_live_display(target, log, price_history, display_ctx))
+            display_ctx.fee_bps = paper_fee_bps(target.symbol, cfg)
+            live.update(
+                render_paper_live_display(
+                    target, log, price_history, display_ctx, movers_board
+                )
+            )
 
     log = ActivityLog(
         enabled=True,
@@ -239,6 +267,7 @@ def run_paper_session(
     stop_requested = False
     quit_requested = False
     engine_ref: dict = {"engine": None}
+    switch_requested: dict = {"pair": None}
     previous_sigint = signal.getsignal(signal.SIGINT)
 
     def _handle_sigint(_signum, _frame) -> None:
@@ -248,28 +277,29 @@ def run_paper_session(
         if eng is not None:
             eng.stop()
 
-    def _resolve_session():
+    def _resolve_session(symbol: str):
         if strategy_name:
             from tradingagents.simulator import PaperTradingSession, StrategySignal
 
             take_profit_raw = cfg.get("paper_take_profit_pct")
             return PaperTradingSession(
-                symbol=ticker,
+                symbol=symbol,
                 strategy_name=strategy_name,
                 lookback=lookback,
                 signal=StrategySignal.FLAT,
                 initial_equity=float(cfg.get("paper_initial_equity", 10_000.0)),
                 stop_loss_pct=float(cfg.get("paper_stop_loss_pct", 0.02)),
                 take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
+                slippage_bps=paper_fee_bps(symbol, cfg),
             )
         return _run_initial_backtest(
-            ticker,
+            symbol,
             cfg,
             log,
             echo_to_console=not use_live_log,
         )
 
-    def _run_loop_body(session) -> None:
+    def _run_loop_body(session, symbol: str) -> None:
         nonlocal tick_count, quit_requested, stop_requested, latest_state
 
         engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
@@ -283,7 +313,7 @@ def run_paper_session(
 
         log.append(
             format_session_start(
-                ticker,
+                symbol,
                 session.strategy_name,
                 session.lookback,
                 adaptive=adaptive_on,
@@ -294,7 +324,7 @@ def run_paper_session(
         if not use_live_log:
             console.print(
                 Panel(
-                    f"Paper simulation for [bold]{ticker}[/bold]\n"
+                    f"Paper simulation for [bold]{symbol}[/bold]\n"
                     f"Strategy: {session.strategy_name} | Adaptive: {'on' if adaptive_on else 'off'}\n"
                     f"Interval: {interval}s\n"
                     f"{PAPER_CONTROLS_TEXT}",
@@ -319,7 +349,31 @@ def run_paper_session(
             _refresh_display()
 
         def _poll_key(timeout: float) -> Optional[str]:
-            return poll_stdin_key(timeout)
+            key = poll_stdin_key(timeout)
+            if key in ("\x1b", "\x1b\x1b"):
+                if display_ctx.show_movers:
+                    display_ctx.show_movers = False
+                    _refresh_display()
+                return None
+            if key == "m":
+                display_ctx.show_movers = not display_ctx.show_movers
+                if display_ctx.show_movers:
+                    movers_board.refresh(log.append, force=True)
+                _refresh_display()
+                return None
+            if display_ctx.show_movers:
+                if key is not None and key in "123456789":
+                    pair = movers_board.pair_for_hotkey(int(key) - 1)
+                    if pair and pair != symbol:
+                        switch_requested["pair"] = pair
+                        display_ctx.show_movers = False
+                        engine.stop()
+                    return None
+                if key == "s":
+                    movers_board.refresh(log.append, force=True)
+                    _refresh_display()
+                    return None
+            return key
 
         latest_state = engine.get_state()
         _record_price(latest_state)
@@ -335,40 +389,73 @@ def run_paper_session(
         except KeyboardInterrupt:
             stop_requested = True
             engine.stop()
-        if not stop_requested and engine._stop_event.is_set():
+        if not stop_requested and engine._stop_event.is_set() and switch_requested["pair"] is None:
             quit_requested = True
+
+        if switch_requested["pair"] and engine.portfolio.positions:
+            engine.close_open_position(reoptimize=False)
 
     signal.signal(signal.SIGINT, _handle_sigint)
     try:
         with cbreak_stdin():
             if use_live_log:
-                latest_state = _bootstrap_paper_state(ticker, cfg)
                 with Live(
                     console=console,
                     refresh_per_second=4,
                     transient=False,
                 ) as live_ctx:
                     live = live_ctx
-                    _refresh_display(latest_state)
-                    session = _resolve_session()
-                    if session is None:
-                        return
-                    latest_state.strategy_name = session.strategy_name
-                    latest_state.lookback = session.lookback
-                    latest_state.signal = session.signal.value
-                    _refresh_display(latest_state)
-                    _run_loop_body(session)
+                    while not stop_requested:
+                        switch_requested["pair"] = None
+                        latest_state = _bootstrap_paper_state(current_ticker, cfg)
+                        display_ctx.fee_bps = paper_fee_bps(current_ticker, cfg)
+                        _refresh_display(latest_state)
+                        session = _resolve_session(current_ticker)
+                        if session is None:
+                            return
+                        latest_state.strategy_name = session.strategy_name
+                        latest_state.lookback = session.lookback
+                        latest_state.signal = session.signal.value
+                        latest_state.symbol = current_ticker
+                        _refresh_display(latest_state)
+                        _run_loop_body(session, current_ticker)
+
+                        if stop_requested or quit_requested:
+                            break
+                        next_pair = switch_requested.get("pair")
+                        if not next_pair or next_pair == current_ticker:
+                            break
+
+                        from tradingagents.simulator.persistence import delete_paper_session
+
+                        equity = float(cfg.get("paper_initial_equity", 10_000.0))
+                        eng = engine_ref.get("engine")
+                        if eng is not None:
+                            equity = eng.portfolio.equity
+                        delete_paper_session(current_ticker, cfg)
+                        log.append(
+                            f"Switching {current_ticker} → {next_pair} "
+                            f"(equity ${equity:,.2f})"
+                        )
+                        cfg["paper_initial_equity"] = equity
+                        cfg["paper_fresh_start"] = True
+                        price_history.reset()
+                        current_ticker = next_pair
             else:
-                session = _resolve_session()
+                session = _resolve_session(current_ticker)
                 if session is None:
                     return
-                _run_loop_body(session)
+                _run_loop_body(session, current_ticker)
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
 
     if latest_state is not None:
         console.print()
-        console.print(render_paper_live_display(latest_state, log, price_history, display_ctx))
+        console.print(
+            render_paper_live_display(
+                latest_state, log, price_history, display_ctx, movers_board
+            )
+        )
     if quit_requested:
         console.print("[yellow]Paper trading stopped (q). State saved.[/yellow]")
     elif stop_requested:

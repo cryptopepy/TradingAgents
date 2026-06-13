@@ -17,6 +17,9 @@ class PaperDisplayContext:
 
     tick_interval: float = 3.0
     seconds_until_next: Optional[float] = None
+    kraken_status: str = ""
+    fee_bps: Optional[float] = None
+    show_movers: bool = False
 
 
 def render_market_panel(
@@ -43,5 +46,9 @@ def render_market_panel(
     table.add_row("Signal", state.signal)
     if state.open_position:
         table.add_row("Position", state.open_position)
+    if ctx.kraken_status:
+        table.add_row("Kraken", ctx.kraken_status)
+    if ctx.fee_bps is not None:
+        table.add_row("Fee (side)", f"{ctx.fee_bps:.1f} bps")
 
     return Panel(table, title="Market", border_style="yellow", expand=True)
