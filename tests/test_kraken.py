@@ -75,9 +75,25 @@ class TestKrakenStatus:
             "apiKeyName": "paper-trading",
             "permissions": ["query-funds", "query-open-trades", "create-ws-token"],
         }
-        assert kraken_status_summary() == (
-            "Kraken: paper-trading (query funds, query open trades, create ws token)"
-        )
+        assert kraken_status_summary() == "authenticated · paper-trading"
+
+    @patch("tradingagents.dataflows.kraken.fetch_api_key_info")
+    @patch("tradingagents.dataflows.kraken.kraken_credentials")
+    def test_kraken_status_summary_without_key_name(self, mock_creds, mock_info):
+        from tradingagents.dataflows.kraken import kraken_status_summary
+
+        mock_creds.return_value = ("key", "secret")
+        mock_info.return_value = {
+            "permissions": ["query-ledger", "export-data", "create-ws-token"],
+        }
+        assert kraken_status_summary() == "authenticated"
+
+    @patch("tradingagents.dataflows.kraken.kraken_credentials")
+    def test_kraken_status_summary_public(self, mock_creds):
+        from tradingagents.dataflows.kraken import kraken_status_summary
+
+        mock_creds.return_value = (None, None)
+        assert kraken_status_summary() == "public only"
 
     @patch("tradingagents.dataflows.kraken._private_post")
     def test_fetch_api_key_info_endpoint_name(self, mock_post):

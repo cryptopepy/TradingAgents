@@ -116,33 +116,21 @@ def fetch_public_ohlc(
 
 
 def kraken_status_summary() -> str:
-    """One-line Kraken auth status for the paper market panel."""
+    """Compact Kraken auth status for the market panel (row is already labeled Kraken)."""
     key, secret = kraken_credentials()
     if not key or not secret:
-        return "Kraken: public (no key)"
+        return "public only"
     try:
         info = fetch_api_key_info()
     except Exception as exc:
-        return f"Kraken: key error ({exc})"
-    label = str(info.get("apiKeyName") or info.get("desc") or "API key")
-    perms = info.get("permissions")
-    if isinstance(perms, list):
-        if not perms:
-            return f"Kraken: {label} (no perms)"
-        short = ", ".join(p.replace("-", " ") for p in perms[:3])
-        if len(perms) > 3:
-            short += "…"
-        return f"Kraken: {label} ({short})"
-    if isinstance(perms, dict):
-        if not any(perms.values()):
-            return f"Kraken: {label} (no perms)"
-        enabled = [k.replace("_", " ") for k, v in perms.items() if v]
-        if enabled:
-            short = ", ".join(enabled[:3])
-            if len(enabled) > 3:
-                short += "…"
-            return f"Kraken: {label} ({short})"
-    return f"Kraken: {label}"
+        msg = str(exc).strip()
+        if len(msg) > 48:
+            msg = msg[:45] + "…"
+        return f"key error — {msg}"
+    label = str(info.get("apiKeyName") or info.get("desc") or "").strip()
+    if label and label.lower() not in {"api key", "apikey"}:
+        return f"authenticated · {label}"
+    return "authenticated"
 
 
 def create_ccxt_kraken():
