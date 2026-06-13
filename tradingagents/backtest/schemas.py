@@ -33,6 +33,10 @@ class WinningStrategySummary(BaseModel):
     sharpe_ratio: float = 0.0
     max_drawdown: float = 0.0
     num_trades: int = 0
+    deployable: bool = True
+    stop_loss_pct: float = 0.02
+    take_profit_pct: Optional[float] = None
+    transaction_cost_pct: float = 0.001
 
 
 class OptimizationResult(BaseModel):
@@ -42,6 +46,8 @@ class OptimizationResult(BaseModel):
     end_date: str
     results: List[StrategyMetrics] = Field(default_factory=list)
     winner: Optional[WinningStrategySummary] = None
+    deployable: bool = False
+    gate_failures: List[str] = Field(default_factory=list)
     live_price: Optional[float] = None
     paper_signal: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)

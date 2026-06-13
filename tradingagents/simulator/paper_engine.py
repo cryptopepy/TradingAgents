@@ -134,12 +134,13 @@ class PaperTradingEngine:
     def _fetch_price(self) -> LivePrice:
         quote = fetch_live_spot_price(self.session.symbol, self.config)
         if quote.source == PriceSource.PLACEHOLDER:
-            self._ensure_dummy_feed(quote.price)
-            quote = LivePrice(
-                symbol=quote.symbol,
-                price=float(self._dummy_feed.fetch_ticker()["last"]),  # type: ignore[union-attr]
-                source=PriceSource.PLACEHOLDER,
-                timestamp=datetime.now(timezone.utc),
+            self._signals_halted = True
+            self._emit_activity(
+                "Price feed unavailable — signals halted (no placeholder/mock fills)"
+            )
+            raise RuntimeError(
+                f"Live price unavailable for {self.session.symbol}; "
+                "check API keys and network connectivity"
             )
         return quote
 
@@ -368,6 +369,9 @@ class PaperTradingEngine:
                 self.session.symbol,
                 end_date,
                 config=self.config,
+                stop_loss_pct=self.session.stop_loss_pct,
+                take_profit_pct=self.session.take_profit_pct,
+                transaction_cost_pct=self.session.slippage_bps / 10_000.0,
                 on_horizon_start=_on_horizon_start,
                 on_horizon_complete=_on_horizon_complete,
                 on_horizon_skipped=_on_horizon_skipped,
@@ -378,8 +382,16 @@ class PaperTradingEngine:
             self._signals_halted = False
             return
 
-        if optimization.winner is None:
-            self._emit_activity("Re-backtest complete — no winning strategy found")
+        if optimization.winner is None or not optimization.deployable:
+            reason = (
+                "; ".join(optimization.gate_failures)
+                if optimization.gate_failures
+                else "no winning strategy found"
+            )
+            self._emit_activity(f"Re-backtest complete — not deployable ({reason})")
+            on_fail = self.config.get("winner_on_gate_fail", "keep")
+            if on_fail == "flat":
+                self.session.signal = StrategySignal.FLAT
             self._adaptive.mark_rebacktest_done(now)
             self._signals_halted = False
             return
@@ -389,23 +401,38 @@ class PaperTradingEngine:
         )
 
         old_name = self.session.strategy_name
+        old_lookback = self.session.lookback
         new_name = optimization.winner.strategy_name
-        if new_name != old_name:
-            self.session.strategy_name = new_name
-            self.session.parameters = dict(optimization.winner.parameters)
-            self.session.lookback = optimization.winner.lookback
-            self.session.signal = StrategySignal.from_string(
-                compute_strategy_signal(
-                    self.session.symbol,
-                    new_name,
-                    optimization.winner.parameters,
-                    optimization.winner.lookback,
-                    end_date,
-                )
+
+        self.session.strategy_name = new_name
+        self.session.parameters = {
+            k: v
+            for k, v in optimization.winner.parameters.items()
+            if not str(k).startswith("_")
+        }
+        self.session.lookback = optimization.winner.lookback
+        self.session.stop_loss_pct = optimization.winner.stop_loss_pct
+        self.session.take_profit_pct = optimization.winner.take_profit_pct
+        self.session.slippage_bps = optimization.winner.transaction_cost_pct * 10_000.0
+        self.matcher.slippage_bps = self.session.slippage_bps
+        self.session.signal = StrategySignal.from_string(
+            compute_strategy_signal(
+                self.session.symbol,
+                new_name,
+                self.session.parameters,
+                optimization.winner.lookback,
+                end_date,
             )
+        )
+
+        if new_name != old_name:
             if self.on_strategy_switch:
                 self.on_strategy_switch(old_name, new_name)
             self._log_autonomous_rotation(old_name, new_name)
+        elif optimization.winner.lookback != old_lookback:
+            self._emit_activity(
+                f"Lookback refreshed: {old_lookback} → {optimization.winner.lookback}"
+            )
 
         self._adaptive.mark_rebacktest_done(now)
         self._signals_halted = False
@@ -519,15 +546,20 @@ def session_from_optimization(
         optimization.winner.lookback,
         optimization.end_date,
     )
-    stop_loss_pct = float(cfg.get("paper_stop_loss_pct", 0.02))
-    take_profit_raw = cfg.get("paper_take_profit_pct")
+    stop_loss_pct = float(optimization.winner.stop_loss_pct)
+    take_profit_pct = optimization.winner.take_profit_pct
+    slippage_bps = float(optimization.winner.transaction_cost_pct * 10_000.0)
+    clean_params = {
+        k: v for k, v in optimization.winner.parameters.items() if not str(k).startswith("_")
+    }
     return PaperTradingSession(
         symbol=optimization.symbol,
         strategy_name=optimization.winner.strategy_name,
         signal=StrategySignal.from_string(signal),
-        parameters=dict(optimization.winner.parameters),
+        parameters=clean_params,
         lookback=optimization.winner.lookback,
         initial_equity=float(cfg.get("paper_initial_equity", 10_000.0)),
         stop_loss_pct=stop_loss_pct,
-        take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
+        take_profit_pct=take_profit_pct,
+        slippage_bps=slippage_bps,
     )

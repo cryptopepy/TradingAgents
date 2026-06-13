@@ -79,20 +79,31 @@ def _run_initial_backtest(
     log.append(f"Running backtest to select strategy for {ticker}…")
     end_date = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
     on_start, on_complete, on_skipped = make_backtest_callbacks(log)
+    sl = float(cfg.get("paper_stop_loss_pct", 0.02))
+    tp_raw = cfg.get("paper_take_profit_pct")
+    transaction_cost_pct = 10.0 / 10_000.0
     optimization = require_optimization_results(
         optimize_strategies(
             ticker,
             end_date,
             config=cfg,
+            stop_loss_pct=sl,
+            take_profit_pct=float(tp_raw) if tp_raw is not None else None,
+            transaction_cost_pct=transaction_cost_pct,
             on_horizon_start=on_start,
             on_horizon_complete=on_complete,
             on_horizon_skipped=on_skipped,
         )
     )
     optimization = deploy_winning_strategy(optimization, cfg)
-    if optimization.winner is None:
-        log.append("No winning strategy found — cannot start paper trading")
-        console.print("[red]No winning strategy found — cannot start paper trading.[/red]")
+    if optimization.winner is None or not optimization.deployable:
+        reason = (
+            "; ".join(optimization.gate_failures)
+            if optimization.gate_failures
+            else "no candidate passed quality gates"
+        )
+        log.append(f"No deployable strategy — {reason}")
+        console.print(f"[red]No deployable strategy — {reason}[/red]")
         return None
     log.append(format_optimization_winner(optimization.winner))
     console.print(

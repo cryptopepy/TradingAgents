@@ -30,6 +30,7 @@ from .portfolio import Direction, TransactionIntent, VirtualPortfolio, signals_t
 from .schemas import OptimizationResult, StrategyMetrics, WinningStrategySummary
 from .strategies import DEFAULT_STRATEGIES, STRATEGY_REGISTRY, Strategy, build_strategy
 from .validation import BacktestDataError
+from .winner_gate import select_winner, winner_gate_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,34 @@ def fetch_historical_price_slice(
     return fetch_historical_crypto(symbol, end_date, window)
 
 
+def _resolve_take_profit_pct(
+    take_profit_pct: Optional[float],
+    stop_loss_pct: float,
+) -> float:
+    if take_profit_pct is not None:
+        return take_profit_pct
+    return stop_loss_pct * 2.0
+
+
+def _iter_risk_param_sets(
+    config: dict,
+    stop_loss_pct: float,
+    take_profit_pct: Optional[float],
+    transaction_cost_pct: float,
+) -> List[tuple[float, Optional[float], float]]:
+    """Yield (stop_loss, take_profit, transaction_cost) combos for optimization."""
+    if not config.get("optimize_risk_params"):
+        return [(stop_loss_pct, take_profit_pct, transaction_cost_pct)]
+
+    combos: List[tuple[float, Optional[float], float]] = []
+    for sl in (0.01, 0.015, 0.02):
+        for tp_mult in (2.0, 3.0):
+            for cost in (0.001, 0.002):
+                combos.append((sl, sl * tp_mult, cost))
+    max_runs = int(config.get("optimize_risk_max_runs", 500))
+    return combos[:max_runs]
+
+
 def _compute_drawdown(equity_curve: pd.Series) -> float:
     if equity_curve.empty:
         return 0.0
@@ -438,6 +467,7 @@ def run_strategy_on_frame(
     *,
     symbol: str = "ASSET",
     stop_loss_pct: float = 0.02,
+    take_profit_pct: Optional[float] = None,
     transaction_cost_pct: float = 0.001,
 ) -> BacktestResult:
     """Simulate a strategy on a prepared OHLCV frame via VirtualPortfolio."""
@@ -473,6 +503,7 @@ def run_strategy_on_frame(
     trades: List[TradeRecord] = []
     equity_points: List[float] = [matcher.portfolio.equity]
     bar_returns: List[float] = []
+    resolved_tp = _resolve_take_profit_pct(take_profit_pct, stop_loss_pct)
 
     for i in range(1, len(df)):
         price = float(close.iloc[i])
@@ -496,6 +527,26 @@ def run_strategy_on_frame(
                     price,
                     transaction_cost_pct,
                     "stop_loss",
+                )
+                position = 0
+                matcher.mark_to_market({symbol: price})
+                bar_returns.append(
+                    (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
+                )
+                equity_points.append(matcher.portfolio.equity)
+                continue
+            if move > 0 and move >= resolved_tp:
+                _submit_exit(matcher, symbol, ts, price)
+                _record_exit_trade(
+                    trades,
+                    dates,
+                    entry_idx,
+                    i,
+                    position,
+                    entry_price,
+                    price,
+                    transaction_cost_pct,
+                    "take_profit",
                 )
                 position = 0
                 matcher.mark_to_market({symbol: price})
@@ -638,6 +689,7 @@ def optimize_strategies(
     strategies: Optional[Sequence[Strategy]] = None,
     *,
     stop_loss_pct: float = 0.02,
+    take_profit_pct: Optional[float] = None,
     transaction_cost_pct: float = 0.001,
     lookbacks: Optional[Sequence[LookbackWindow]] = None,
     on_metric: Optional[Callable[[StrategyMetrics], None]] = None,
@@ -655,6 +707,8 @@ def optimize_strategies(
     warnings: List[str] = []
     metric_callback: Optional[Callable[[StrategyMetrics], None]] = on_metric
     cfg = config or get_config()
+    gate = winner_gate_from_config(cfg)
+    risk_sets = _iter_risk_param_sets(cfg, stop_loss_pct, take_profit_pct, transaction_cost_pct)
 
     for idx, lookback in enumerate(windows):
         if idx:
@@ -698,17 +752,28 @@ def optimize_strategies(
             continue
         horizon_metrics: List[StrategyMetrics] = []
         for strategy in strategies:
-            result = run_strategy_on_frame(
-                df,
-                strategy,
-                stop_loss_pct=stop_loss_pct,
-                transaction_cost_pct=transaction_cost_pct,
-            )
-            metric = _metrics_from_result(strategy, lookback, result)
-            all_metrics.append(metric)
-            horizon_metrics.append(metric)
-            if metric_callback is not None:
-                metric_callback(metric)
+            best_metric: Optional[StrategyMetrics] = None
+            for sl, tp, cost in risk_sets:
+                result = run_strategy_on_frame(
+                    df,
+                    strategy,
+                    stop_loss_pct=sl,
+                    take_profit_pct=tp,
+                    transaction_cost_pct=cost,
+                )
+                metric = _metrics_from_result(strategy, lookback, result)
+                params = dict(metric.parameters)
+                params["_stop_loss_pct"] = sl
+                params["_take_profit_pct"] = tp
+                params["_transaction_cost_pct"] = cost
+                metric = metric.model_copy(update={"parameters": params})
+                if best_metric is None or metric.net_profit_ratio > best_metric.net_profit_ratio:
+                    best_metric = metric
+            if best_metric is not None:
+                all_metrics.append(best_metric)
+                horizon_metrics.append(best_metric)
+                if metric_callback is not None:
+                    metric_callback(best_metric)
         if on_horizon_complete is not None:
             on_horizon_complete(
                 lookback,
@@ -719,18 +784,19 @@ def optimize_strategies(
             )
 
     winner_summary: Optional[WinningStrategySummary] = None
+    gate_failures: List[str] = []
     if all_metrics:
-        best = max(all_metrics, key=lambda m: m.net_profit_ratio)
-        winner_summary = WinningStrategySummary(
-            strategy_name=best.strategy_name,
-            lookback=best.lookback,
-            historical_profit_ratio=best.net_profit_ratio,
-            parameters=best.parameters,
-            profit_factor=best.profit_factor,
-            sharpe_ratio=best.sharpe_ratio,
-            max_drawdown=best.max_drawdown,
-            num_trades=best.num_trades,
+        winner_summary, gate_failures = select_winner(
+            all_metrics,
+            gate,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            transaction_cost_pct=transaction_cost_pct,
         )
+        if winner_summary is None and gate_failures:
+            warnings.append(
+                "No deployable winner — " + "; ".join(gate_failures)
+            )
 
     if not all_metrics and not warnings:
         warnings.append(
@@ -742,6 +808,8 @@ def optimize_strategies(
         end_date=end_date,
         results=all_metrics,
         winner=winner_summary,
+        deployable=winner_summary is not None and winner_summary.deployable,
+        gate_failures=gate_failures,
         warnings=warnings,
     )
 
@@ -821,19 +889,24 @@ def format_optimization_summary(optimization: OptimizationResult) -> str:
     ]
     if optimization.winner:
         w = optimization.winner
+        deploy_label = "deployable" if optimization.deployable else "not deployable"
         lines.extend(
             [
                 "",
-                "### Winning Strategy",
+                f"### Winning Strategy ({deploy_label})",
                 f"- **Name:** {w.strategy_name}",
                 f"- **Lookback:** {w.lookback}",
                 f"- **Historical profit ratio:** {w.historical_profit_ratio:.4f}",
                 f"- **Profit factor:** {w.profit_factor:.2f}",
                 f"- **Sharpe:** {w.sharpe_ratio:.2f}",
                 f"- **Max drawdown:** {w.max_drawdown:.2%}",
+                f"- **Trades:** {w.num_trades}",
+                f"- **Risk:** SL={w.stop_loss_pct:.3f} TP={w.take_profit_pct} cost={w.transaction_cost_pct:.4f}",
                 f"- **Parameters:** {w.parameters}",
             ]
         )
+    elif optimization.gate_failures:
+        lines.extend(["", "### No deployable winner", *[f"- {f}" for f in optimization.gate_failures]])
     if optimization.live_price is not None:
         lines.append(f"- **Current price:** {optimization.live_price:.4f}")
     if optimization.paper_signal:

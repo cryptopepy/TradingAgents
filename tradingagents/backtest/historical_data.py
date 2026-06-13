@@ -319,6 +319,29 @@ def fetch_intraday_ohlcv(
             lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
         ),
     ]
+    cfg = config or {}
+    if cfg.get("backtest_prefer_binance") or os.environ.get("BACKTEST_PREFER_BINANCE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        vendors = [
+            (
+                "Binance",
+                lambda: _fetch_binance_ohlcv(symbol, start_dt, end_dt, binance_interval),
+            ),
+            (
+                ccxt_label,
+                lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
+            ),
+            (
+                "CryptoCompare",
+                lambda: _fetch_cryptocompare_ohlcv(
+                    symbol, start_dt, end_dt, cc_endpoint, resample_rule
+                ),
+            ),
+        ]
 
     for name, fetcher in vendors:
         try:

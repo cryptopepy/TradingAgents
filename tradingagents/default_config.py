@@ -32,6 +32,13 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PAPER_STATE_ENABLED": "paper_state_persistence",
     "TRADINGAGENTS_PAPER_STOP_LOSS_PCT": "paper_stop_loss_pct",
     "TRADINGAGENTS_PAPER_TAKE_PROFIT_PCT": "paper_take_profit_pct",
+    "TRADINGAGENTS_WINNER_GATE_ENABLED": "winner_gate_enabled",
+    "TRADINGAGENTS_WINNER_MIN_NET_PROFIT": "winner_min_net_profit",
+    "TRADINGAGENTS_WINNER_MIN_TRADES": "winner_min_trades",
+    "TRADINGAGENTS_WINNER_MAX_DRAWDOWN_PCT": "winner_max_drawdown_pct",
+    "TRADINGAGENTS_WINNER_ON_GATE_FAIL": "winner_on_gate_fail",
+    "TRADINGAGENTS_OPTIMIZE_RISK_PARAMS": "optimize_risk_params",
+    "BACKTEST_PREFER_BINANCE": "backtest_prefer_binance",
 }
 
 
@@ -100,6 +107,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "paper_state_persistence": True,
     "paper_stop_loss_pct": 0.02,
     "paper_take_profit_pct": None,
+    # Winner gating for optimize_strategies / auto-deploy
+    "winner_gate_enabled": True,
+    "winner_min_net_profit": 0.0,
+    "winner_min_trades": 3,
+    "winner_max_drawdown_pct": 0.15,
+    "winner_on_gate_fail": "keep",
+    # Risk-parameter sweep during optimization (off by default)
+    "optimize_risk_params": False,
+    "optimize_risk_max_runs": 500,
+    # Prefer Binance/ccxt before CryptoCompare for backtest OHLCV
+    "backtest_prefer_binance": False,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

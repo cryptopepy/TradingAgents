@@ -57,8 +57,19 @@ Simulated trading is the primary product surface; LLM analysis feeds optional co
 - **Config:** `.env.example` paper-trading section
 
 ### Follow-up
-- [ ] PAPER-8: Persist paper session state to disk (resume across restarts)
+- [ ] PAPER-8: Persist paper session state to disk (resume across restarts) — **done in P3-4**
 - [ ] PAPER-9: Web UI (Streamlit) for portfolio dashboard
+
+## Epic: Strategy & Simulation Improvements (IMPROVE)
+
+See **`PLAN-IMPROVE.md`** for the full implementation blueprint (backtest/paper parity, winner gating, unified feed, param search). Spot-only; futures excluded.
+
+- [x] IMPROVE-1: Backtest/paper parity (take-profit, adaptive risk params, lookback refresh)
+- [x] IMPROVE-2: Winner gating (min profit, min trades, max drawdown)
+- [x] IMPROVE-3: Unified spot price pipeline (`BACKTEST_PREFER_BINANCE`)
+- [x] IMPROVE-4: Risk parameter sweep in optimizer
+- [ ] IMPROVE-5: Per-strategy parameter optimization (opt-in)
+- [ ] IMPROVE-6: Walk-forward validation (opt-in)
 
 ## Epic: Multi-Phase Platform Refinement (v0.4.x)
 

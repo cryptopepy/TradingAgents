@@ -60,6 +60,7 @@ class TestPaperTradingEngine:
                 historical_profit_ratio=0.1,
                 parameters={"period": 14},
             ),
+            deployable=True,
         )
         session = PaperTradingSession(
             symbol="ETH/USDT",

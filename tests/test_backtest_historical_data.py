@@ -110,7 +110,11 @@ class TestBacktestHistoricalData:
             "tradingagents.backtest.engine.fetch_intraday_ohlcv",
             return_value=df,
         ):
-            result = optimize_strategies("BTC/USDT", "2026-06-01")
+            result = optimize_strategies(
+                "BTC/USDT",
+                "2026-06-01",
+                config={"winner_gate_enabled": False},
+            )
 
         assert len(result.results) == 30
         assert result.winner is not None
