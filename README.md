@@ -112,7 +112,7 @@ export DEMO_TICKER=ETH/USDC DEMO_DATE=2026-06-11 && python main.py
 
 ## Backtesting
 
-Pure-code engine: intraday OHLCV via **CryptoCompare** → **Binance klines** → **ccxt** when `LIVE_MODE=1` or `--live`. Runs **24/7** (no equity session gaps). On fetch failure: `BacktestDataError` with vendor diagnostics (`TRADINGAGENTS_DEBUG=1` for traceback).
+Pure-code engine: intraday OHLCV via **ccxt** (Kraken/Coinbase/Binance) → **Binance klines** → **CryptoCompare** (last resort). Runs **24/7** (no equity session gaps). On fetch failure: `BacktestDataError` with vendor diagnostics (`TRADINGAGENTS_DEBUG=1` for traceback).
 
 ### Strategies (A–J)
 
@@ -182,7 +182,7 @@ When `paper_adaptive_enabled` is on, sustained drawdown triggers `optimize_strat
 
 Thresholds via post-analysis paper prompts or env (`TRADINGAGENTS_MAX_ALLOWED_DRAWDOWN_PCT`, `TRADINGAGENTS_DRAWDOWN_TIME_WINDOW`, `TRADINGAGENTS_DRAWDOWN_MAX_LOOKBACK_MINUTES`).
 
-Live session controls: **`(c)` Close and reassess** (close position, re-run optimization), **`(q)`** quit. Activity log shows per-horizon backtest results and price provider.
+Live session controls: **`(c)` Close and reassess** (close position, re-run optimization), **`(q)`** quit. Activity log shows per-vendor OHLCV attempts (`✓`/`✗`), horizon results, and price provider. **Price ticks** panel (right) lists recent spot samples with Δ. Default tick interval **3s** (`TRADINGAGENTS_PAPER_TICK_INTERVAL_SECONDS`).
 
 ### Python API
 
@@ -274,7 +274,8 @@ Defaults preserve prior behavior (full position size, no cooldown, net-profit wi
 |------|---------|
 | `BACKTEST_CCXT_EXCHANGES` | ccxt order when OHLCV vendors fail (e.g. `kraken,coinbase`) |
 | `BACKTEST_CACHE_TTL_SECONDS` | OHLCV disk cache TTL |
-| `BACKTEST_PREFER_BINANCE` | Binance/ccxt before CryptoCompare for backtest candles |
+| `BACKTEST_SKIP_CRYPTOCOMPARE` | Set `1` to omit CryptoCompare OHLCV (default: last-resort fallback) |
+| `BACKTEST_PREFER_BINANCE` | Legacy flag; ccxt is always first in the OHLCV chain |
 | `TRADINGAGENTS_WINNER_GATE_ENABLED` | Require min profit, trades, max drawdown before auto-deploy |
 | `TRADINGAGENTS_WINNER_MIN_NET_PROFIT` | Min net return to deploy (default `0`) |
 | `TRADINGAGENTS_WINNER_MIN_TRADES` | Min trades per candidate (default `3`) |

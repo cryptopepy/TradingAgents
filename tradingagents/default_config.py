@@ -39,6 +39,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_WINNER_ON_GATE_FAIL": "winner_on_gate_fail",
     "TRADINGAGENTS_OPTIMIZE_RISK_PARAMS": "optimize_risk_params",
     "BACKTEST_PREFER_BINANCE": "backtest_prefer_binance",
+    "BACKTEST_SKIP_CRYPTOCOMPARE": "backtest_skip_cryptocompare",
+    "BACKTEST_CCXT_EXCHANGES": "backtest_ccxt_exchanges",
     "TRADINGAGENTS_OPTIMIZE_STRATEGY_PARAMS": "optimize_strategy_params",
     "TRADINGAGENTS_PARAM_SEARCH_SAMPLES": "param_search_samples",
     "TRADINGAGENTS_PARAM_SEARCH_MAX_RUNS": "param_search_max_runs",
@@ -111,7 +113,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "paper_trade_enabled": False,
     "paper_loss_review_minutes": 60,
     "paper_loss_threshold_pct": 5.0,
-    "paper_tick_interval_seconds": 10.0,
+    "paper_tick_interval_seconds": 3.0,
     "paper_initial_equity": 10_000.0,
     "paper_adaptive_enabled": True,
     "paper_state_persistence": True,
@@ -126,8 +128,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Risk-parameter sweep during optimization (off by default)
     "optimize_risk_params": False,
     "optimize_risk_max_runs": 500,
-    # Prefer Binance/ccxt before CryptoCompare for backtest OHLCV
+    # Prefer Binance/ccxt before CryptoCompare for backtest OHLCV (legacy flag; ccxt is always first now).
     "backtest_prefer_binance": False,
+    # Omit CryptoCompare from the OHLCV chain entirely (off by default — it runs last as fallback).
+    "backtest_skip_cryptocompare": False,
+    # ccxt exchange order for OHLCV + live spot (Kraken/Coinbase before Binance).
+    "backtest_ccxt_exchanges": "kraken,coinbase,binance",
     # Per-strategy parameter search during optimization (off by default)
     "optimize_strategy_params": False,
     "param_search_samples": 20,

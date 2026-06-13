@@ -271,11 +271,14 @@ def fetch_historical_crypto(
     config: Optional[dict] = None,
     now: datetime | None = None,
     on_fetch: Optional[Callable[[str, int, bool], None]] = None,
+    on_provider_attempt: Optional[Callable[[str, int, bool, str], None]] = None,
     extra_hours: float = 0.0,
+    min_bars: int = 30,
 ) -> pd.DataFrame:
     """Load OHLCV for a lookback window with local CSV cache and vendor fallbacks.
 
     ``on_fetch`` receives ``(provider_label, bar_count, cache_hit)`` when data is loaded.
+    ``on_provider_attempt`` receives ``(vendor, bars, ok, detail)`` for each vendor try.
     """
     ticker = _historic_ticker(symbol)
     granularity = lookback.granularity_seconds()
@@ -318,9 +321,25 @@ def fetch_historical_crypto(
                 cached["Date"] <= pd.Timestamp(end_dt)
             )
             sliced = cached.loc[mask].reset_index(drop=True)
-            if on_fetch is not None:
-                on_fetch("disk cache", len(sliced), True)
-            return sliced
+            if len(sliced) >= min_bars:
+                if on_fetch is not None:
+                    on_fetch("disk cache", len(sliced), True)
+                if on_provider_attempt is not None:
+                    on_provider_attempt("disk cache", len(sliced), True, f"{len(sliced)} bars (cache)")
+                return sliced
+            logger.info(
+                "Cache has only %d bars for %s (need %d) — refetching vendors",
+                len(sliced),
+                cache_file.name,
+                min_bars,
+            )
+            if on_provider_attempt is not None:
+                on_provider_attempt(
+                    "disk cache",
+                    len(sliced),
+                    False,
+                    f"only {len(sliced)} bars (need {min_bars})",
+                )
         logger.info("Cache incomplete for %s — refetching", cache_file.name)
     elif not force_refresh and cache_file.exists():
         logger.debug(
@@ -343,6 +362,8 @@ def fetch_historical_crypto(
         live_mode=is_live_mode(cfg),
         config=cfg,
         on_provider=_record_provider,
+        on_provider_attempt=on_provider_attempt,
+        min_bars=min_bars,
     )
     df = _normalize_historic_df(df)
     if df.empty:
@@ -759,6 +780,9 @@ def optimize_strategies(
         Callable[[LookbackWindow, str, int, bool, List[StrategyMetrics]], None]
     ] = None,
     on_horizon_skipped: Optional[Callable[[LookbackWindow, str], None]] = None,
+    on_horizon_provider_attempt: Optional[
+        Callable[[LookbackWindow, str, int, bool, str], None]
+    ] = None,
     config: Optional[dict] = None,
 ) -> OptimizationResult:
     """Run all strategies across 8h, 24h, and 7d horizons; pick the winner."""
@@ -785,6 +809,10 @@ def optimize_strategies(
             fetch_meta["bars"] = bars
             fetch_meta["cache_hit"] = cache_hit
 
+        def _on_provider_attempt(vendor: str, bars: int, ok: bool, detail: str) -> None:
+            if on_horizon_provider_attempt is not None:
+                on_horizon_provider_attempt(lookback, vendor, bars, ok, detail)
+
         try:
             df = fetch_historical_crypto(
                 symbol,
@@ -792,6 +820,7 @@ def optimize_strategies(
                 lookback,
                 config=cfg,
                 on_fetch=_on_fetch,
+                on_provider_attempt=_on_provider_attempt,
                 extra_hours=validate_hours if walk_forward_enabled else 0.0,
             )
         except BacktestDataError as exc:

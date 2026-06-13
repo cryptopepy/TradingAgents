@@ -15,6 +15,7 @@ from tradingagents.simulator.activity_messages import (
     format_horizon_complete,
     format_horizon_skipped,
     format_horizon_start,
+    format_horizon_worst,
     format_optimization_winner,
     format_price_feed,
     format_provider_line,
@@ -55,10 +56,12 @@ class ActivityLog:
         max_lines: int = 75,
         enabled: bool = True,
         echo: Optional[Callable[[str], None]] = None,
+        on_change: Optional[Callable[[], None]] = None,
     ) -> None:
         self._lines: deque[tuple[str, str]] = deque(maxlen=max_lines)
         self.enabled = enabled
         self._echo = echo
+        self._on_change = on_change
 
     def append(self, message: str) -> None:
         if not self.enabled or not message:
@@ -67,6 +70,8 @@ class ActivityLog:
         self._lines.append((timestamp, message))
         if self._echo is not None:
             self._echo(message)
+        if self._on_change is not None:
+            self._on_change()
 
     def extend(self, messages: Iterable[str]) -> None:
         for message in messages:
@@ -102,9 +107,19 @@ def make_backtest_callbacks(log: ActivityLog):
     """Return optimize_strategies horizon callbacks wired to an activity log."""
     from tradingagents.backtest.engine import LookbackWindow
     from tradingagents.backtest.schemas import StrategyMetrics
+    from tradingagents.simulator.activity_messages import format_provider_attempt
 
     def on_horizon_start(lookback: LookbackWindow) -> None:
         log.append(format_horizon_start(lookback.value))
+
+    def on_horizon_provider_attempt(
+        lookback: LookbackWindow,
+        vendor: str,
+        bars: int,
+        ok: bool,
+        detail: str,
+    ) -> None:
+        log.append(format_provider_attempt(lookback.value, vendor, bars, ok, detail))
 
     def on_horizon_complete(
         lookback: LookbackWindow,
@@ -122,8 +137,11 @@ def make_backtest_callbacks(log: ActivityLog):
                 cache_hit=cache_hit,
             )
         )
+        worst_line = format_horizon_worst(lookback.value, metrics)
+        if worst_line:
+            log.append(worst_line)
 
     def on_horizon_skipped(lookback: LookbackWindow, reason: str) -> None:
         log.append(format_horizon_skipped(lookback.value, reason))
 
-    return on_horizon_start, on_horizon_complete, on_horizon_skipped
+    return on_horizon_start, on_horizon_complete, on_horizon_skipped, on_horizon_provider_attempt

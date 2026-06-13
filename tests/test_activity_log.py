@@ -10,6 +10,7 @@ from tradingagents.backtest.schemas import StrategyMetrics, WinningStrategySumma
 from tradingagents.simulator.activity_messages import (
     format_horizon_complete,
     format_horizon_skipped,
+    format_horizon_worst,
     format_price_feed,
     format_tick_action,
 )
@@ -48,6 +49,63 @@ class TestActivityMessages:
         assert "rsi_mean_reversion" in line
         assert "+18.00%" in line
 
+    def test_format_horizon_worst_shows_lowest_net_profit(self):
+        metrics = [
+            StrategyMetrics(
+                strategy_name="ema_crossover",
+                lookback="8h",
+                parameters={},
+                profit_factor=1.5,
+                sharpe_ratio=0.8,
+                max_drawdown=0.05,
+                net_profit_ratio=0.12,
+                num_trades=4,
+                win_rate=75.0,
+            ),
+            StrategyMetrics(
+                strategy_name="rsi_mean_reversion",
+                lookback="8h",
+                parameters={},
+                profit_factor=2.1,
+                sharpe_ratio=1.1,
+                max_drawdown=0.03,
+                net_profit_ratio=0.18,
+                num_trades=6,
+                win_rate=66.0,
+            ),
+            StrategyMetrics(
+                strategy_name="apo_crossover",
+                lookback="8h",
+                parameters={},
+                profit_factor=0.4,
+                sharpe_ratio=-0.2,
+                max_drawdown=0.12,
+                net_profit_ratio=-0.08,
+                num_trades=3,
+                win_rate=33.0,
+            ),
+        ]
+        line = format_horizon_worst("8h", metrics)
+        assert line is not None
+        assert "worst: apo_crossover" in line
+        assert "-8.00%" in line
+
+    def test_format_horizon_worst_none_for_single_strategy(self):
+        metrics = [
+            StrategyMetrics(
+                strategy_name="ema_crossover",
+                lookback="8h",
+                parameters={},
+                profit_factor=1.5,
+                sharpe_ratio=0.8,
+                max_drawdown=0.05,
+                net_profit_ratio=0.12,
+                num_trades=4,
+                win_rate=75.0,
+            ),
+        ]
+        assert format_horizon_worst("8h", metrics) is None
+
     def test_format_horizon_skipped(self):
         line = format_horizon_skipped("24h", "insufficient bars (12 < 30)")
         assert "24h" in line
@@ -59,6 +117,12 @@ class TestActivityMessages:
         assert "STOP-LOSS" in line
         assert "49,500" in line
         assert "9,850" in line
+
+    def test_append_invokes_on_change(self):
+        calls: list[str] = []
+        log = ActivityLog(enabled=True, on_change=lambda: calls.append("changed"))
+        log.append("hello")
+        assert calls == ["changed"]
 
     def test_format_price_feed_with_failures(self):
         assert "Price feed" in format_price_feed("kraken", 50_000.0, first=True)

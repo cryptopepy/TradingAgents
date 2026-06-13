@@ -136,7 +136,7 @@ def run_backtest_with_progress(
             total=total,
         )
         log = make_progress_logger(progress)
-        on_start, on_complete, on_skipped = make_backtest_callbacks(log)
+        on_start, on_complete, on_skipped, on_provider_attempt = make_backtest_callbacks(log)
 
         def _advance(_metric: StrategyMetrics) -> None:
             progress.advance(task_id)
@@ -152,6 +152,7 @@ def run_backtest_with_progress(
             on_horizon_start=on_start,
             on_horizon_complete=on_complete,
             on_horizon_skipped=on_skipped,
+            on_horizon_provider_attempt=on_provider_attempt,
             config=config,
         )
 

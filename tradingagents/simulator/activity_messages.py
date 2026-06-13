@@ -24,12 +24,35 @@ def format_provider_line(
     return " ".join(parts)
 
 
+def format_provider_attempt(
+    lookback: str,
+    vendor: str,
+    bars: int,
+    ok: bool,
+    detail: str,
+) -> str:
+    prefix = f"[{lookback}] {vendor}"
+    if ok:
+        return f"{prefix} ✓ {detail}"
+    if bars > 0:
+        return f"{prefix} ✗ {detail}"
+    return f"{prefix} ✗ {detail or 'failed'}"
+
+
 def format_horizon_start(lookback: str) -> str:
     return f"Backtest horizon {lookback} — fetching history…"
 
 
 def format_horizon_skipped(lookback: str, reason: str) -> str:
     return f"Backtest {lookback} skipped — {reason}"
+
+
+def _format_strategy_result(metric: StrategyMetrics) -> str:
+    return (
+        f"{metric.strategy_name} "
+        f"(net {metric.net_profit_ratio:+.2%}, PF {metric.profit_factor:.2f}, "
+        f"{metric.num_trades} trades)"
+    )
 
 
 def format_horizon_complete(
@@ -46,11 +69,18 @@ def format_horizon_complete(
     if not metrics:
         return f"{provider_part} — no strategy results"
     best = max(metrics, key=lambda m: m.net_profit_ratio)
-    return (
-        f"{provider_part} — best: {best.strategy_name} "
-        f"(net {best.net_profit_ratio:+.2%}, PF {best.profit_factor:.2f}, "
-        f"{best.num_trades} trades)"
-    )
+    return f"{provider_part} — best: {_format_strategy_result(best)}"
+
+
+def format_horizon_worst(lookback: str, metrics: Sequence[StrategyMetrics]) -> str | None:
+    """Worst strategy on a horizon, or None when there is nothing useful to show."""
+    if len(metrics) < 2:
+        return None
+    worst = min(metrics, key=lambda m: m.net_profit_ratio)
+    best = max(metrics, key=lambda m: m.net_profit_ratio)
+    if worst.strategy_name == best.strategy_name and worst.net_profit_ratio == best.net_profit_ratio:
+        return None
+    return f"[{lookback}] worst: {_format_strategy_result(worst)}"
 
 
 def format_optimization_winner(
@@ -73,6 +103,10 @@ def format_optimization_winner(
 
 def format_drawdown_rebacktest_banner(drawdown_pct: float) -> str:
     return f"══ Drawdown review ({drawdown_pct:.2f}%) — re-running backtest ══"
+
+
+def format_reanalyze_banner() -> str:
+    return "══ Reanalyze (r) — re-running backtest ══"
 
 
 def format_price_feed(
@@ -111,7 +145,7 @@ def format_tick_action(action: str, price: float, equity: float) -> str:
         "signal_exit": "Signal exit",
         "enter_long": "Enter LONG",
         "enter_short": "Enter SHORT",
-        "manual_close": "Close and retest (c)",
+        "manual_close": "Close position and retest (c)",
     }
     label = labels.get(action, action.replace("_", " ").title())
     return f"{label} @ ${price:,.4f} — equity ${equity:,.2f}"

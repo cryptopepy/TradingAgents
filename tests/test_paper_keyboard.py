@@ -49,6 +49,9 @@ class TestPaperControlsDisplay:
         rendered = buffer.getvalue()
         assert PAPER_CONTROLS_TEXT in rendered
         assert "(c)" in rendered
+        assert "Close position and retest" in rendered
+        assert "(r)" in rendered
+        assert "Reanalyze" in rendered
         assert "(q)" in rendered
         assert "Ctrl+C" not in rendered
 
@@ -211,6 +214,59 @@ class TestRunLoopKeyboard:
             engine.run_loop(interval_seconds=5.0, poll_key=_poll_key)
 
         close_mock.assert_called_once_with(reoptimize=True)
+
+    @patch("tradingagents.simulator.paper_engine.optimize_strategies")
+    @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
+    @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
+    def test_run_loop_reanalyzes_on_r_key(self, mock_price, _signal, mock_optimize):
+        from tradingagents.backtest.schemas import OptimizationResult, WinningStrategySummary
+
+        mock_price.return_value = LivePrice(
+            symbol="BTC/USDT",
+            price=50_000.0,
+            source=PriceSource.CRYPTOCOMPARE,
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        )
+        mock_optimize.return_value = OptimizationResult(
+            symbol="BTC/USDT",
+            end_date="2026-06-12",
+            results=[],
+            winner=WinningStrategySummary(
+                strategy_name="rsi_mean_reversion",
+                lookback="24h",
+                historical_profit_ratio=0.1,
+                parameters={"period": 14},
+            ),
+            deployable=True,
+        )
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        engine = PaperTradingEngine(
+            session,
+            {"paper_fresh_start": True, "paper_state_persistence": False},
+            adaptive_enabled=True,
+        )
+        reanalyze_mock = MagicMock(wraps=engine.reanalyze)
+
+        with patch.object(engine, "reanalyze", reanalyze_mock):
+            poll_calls = 0
+
+            def _poll_key(_timeout: float):
+                nonlocal poll_calls
+                poll_calls += 1
+                if poll_calls == 1:
+                    return "r"
+                if poll_calls == 2:
+                    return "q"
+                return None
+
+            engine.run_loop(interval_seconds=5.0, poll_key=_poll_key)
+
+        reanalyze_mock.assert_called_once()
 
     def test_sleep_until_stopped_or_key_returns_pressed_key(self):
         import threading

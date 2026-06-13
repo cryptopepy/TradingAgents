@@ -26,6 +26,7 @@ from tradingagents.backtest.engine import (
 from tradingagents.dataflows.config import set_config
 from tradingagents.backtest.historical_data import fetch_intraday_ohlcv
 from tradingagents.backtest.schemas import OptimizationResult
+from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
 
 def _sample_ohlcv(rows: int = 80) -> pd.DataFrame:
@@ -46,14 +47,19 @@ def _sample_ohlcv(rows: int = 80) -> pd.DataFrame:
 @pytest.mark.unit
 class TestBacktestHistoricalData:
     def test_cryptocompare_api_error_surfaces_message(self):
-        error_payload = {"Response": "Error", "Message": "You are over your rate limit"}
-
         with patch(
-            "tradingagents.dataflows.crypto_common.http_get_json",
-            return_value=error_payload,
+            "tradingagents.backtest.historical_data._fetch_cryptocompare_ohlcv",
+            side_effect=NoMarketDataError(
+                "BTC/USDT",
+                "BTC/USDT",
+                "You are over your rate limit please upgrade your account!",
+            ),
         ), patch(
             "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
             side_effect=Exception("451 blocked"),
+        ), patch(
+            "tradingagents.backtest.historical_data.ccxt_exchange_ids",
+            return_value=(),
         ):
             with pytest.raises(BacktestDataError, match="rate limit"):
                 fetch_intraday_ohlcv(
@@ -61,6 +67,7 @@ class TestBacktestHistoricalData:
                     pd.Timestamp("2026-06-01 00:00").to_pydatetime(),
                     pd.Timestamp("2026-06-01 08:00").to_pydatetime(),
                     300,
+                    config={"backtest_skip_cryptocompare": False},
                 )
 
     def test_fetch_intraday_ohlcv_raises_backtest_data_error(self):
@@ -71,8 +78,11 @@ class TestBacktestHistoricalData:
             "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
             side_effect=Exception("451 blocked"),
         ), patch(
-            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv",
+            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv_from_exchange",
             side_effect=Exception("ccxt unavailable"),
+        ), patch(
+            "tradingagents.backtest.historical_data.ccxt_exchange_ids",
+            return_value=("kraken",),
         ):
             with pytest.raises(BacktestDataError, match="Could not load intraday OHLCV"):
                 fetch_intraday_ohlcv(
@@ -91,9 +101,12 @@ class TestBacktestHistoricalData:
             "tradingagents.backtest.historical_data._fetch_binance_ohlcv",
             side_effect=Exception("451 blocked"),
         ), patch(
-            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv",
+            "tradingagents.backtest.historical_data._fetch_ccxt_ohlcv_from_exchange",
             return_value=df,
-        ) as mock_ccxt:
+        ) as mock_ccxt, patch(
+            "tradingagents.backtest.historical_data.ccxt_exchange_ids",
+            return_value=("kraken",),
+        ):
             out = fetch_intraday_ohlcv(
                 "BTC/USDT",
                 pd.Timestamp("2026-06-01 00:00").to_pydatetime(),

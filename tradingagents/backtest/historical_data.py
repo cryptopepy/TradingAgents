@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional
 
 import pandas as pd
 import requests
@@ -21,6 +21,27 @@ logger = logging.getLogger(__name__)
 _GRANULARITY_5M = 300
 _GRANULARITY_15M = 900
 _GRANULARITY_1H = 3600
+
+# ccxt interval string → candle length in milliseconds
+_INTERVAL_MS: dict[str, int] = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+}
+
+
+def _naive_utc_s(dt: datetime) -> int:
+    """Unix seconds for a naive datetime whose wall clock is UTC (not local)."""
+    ts = pd.Timestamp(dt)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return int(ts.timestamp())
+
+
+def _naive_utc_ms(dt: datetime) -> int:
+    """Unix milliseconds for a naive datetime whose wall clock is UTC (not local)."""
+    return _naive_utc_s(dt) * 1000
 
 _VENDOR_SPECS: dict[int, tuple[str, str, str | None]] = {
     _GRANULARITY_5M: ("5m", "histominute", "5min"),
@@ -88,12 +109,12 @@ def _fetch_cryptocompare_ohlcv(
     fsym, tsym = _quote_symbol(symbol)
     step_seconds = 60 if endpoint == "histominute" else 3600
     bars_needed = max(1, int((end_dt - start_dt).total_seconds() / step_seconds) + 5)
-    to_ts = int(end_dt.timestamp())
+    to_ts = _naive_utc_s(end_dt)
     collected: list[dict] = []
     attempts = 0
     max_attempts = 5
 
-    while to_ts > int(start_dt.timestamp()) and attempts < max_attempts:
+    while to_ts > _naive_utc_s(start_dt) and attempts < max_attempts:
         attempts += 1
         limit = min(2000, max(bars_needed - len(collected), 30))
         last_exc: Exception | None = None
@@ -134,7 +155,7 @@ def _fetch_cryptocompare_ohlcv(
             break
         collected = raw + collected
         earliest = min(row["time"] for row in collected)
-        if earliest <= int(start_dt.timestamp()):
+        if earliest <= _naive_utc_s(start_dt):
             break
         to_ts = earliest - 1
         bars_needed = max(bars_needed, int((end_dt - start_dt).total_seconds() / step_seconds) + 5)
@@ -168,11 +189,20 @@ def _fetch_cryptocompare_ohlcv(
 
 
 _DEFAULT_CCXT_EXCHANGES = ("kraken", "coinbase", "binance")
+_DEFAULT_CCXT_EXCHANGES_CSV = "kraken,coinbase,binance"
 
 
-def ccxt_exchange_ids() -> tuple[str, ...]:
-    """ccxt exchange order for OHLCV and live spot (``BACKTEST_CCXT_EXCHANGES``)."""
+def ccxt_exchange_ids(config: dict | None = None) -> tuple[str, ...]:
+    """ccxt exchange order for OHLCV and live spot.
+
+    Default: ``kraken,coinbase,binance``. Override via ``BACKTEST_CCXT_EXCHANGES`` or
+    config key ``backtest_ccxt_exchanges``.
+    """
     raw = os.environ.get("BACKTEST_CCXT_EXCHANGES", "").strip()
+    if not raw and config is not None:
+        raw = str(config.get("backtest_ccxt_exchanges", "") or "").strip()
+    if not raw:
+        raw = _DEFAULT_CCXT_EXCHANGES_CSV
     if raw:
         return tuple(x.strip().lower() for x in raw.split(",") if x.strip())
     return _DEFAULT_CCXT_EXCHANGES
@@ -235,17 +265,29 @@ def _fetch_ccxt_ohlcv_from_exchange(
             f"{exchange_id} has no market for {pair.display}",
         )
 
-    since_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(end_dt.timestamp() * 1000)
+    since_ms = _naive_utc_ms(start_dt)
+    end_ms = _naive_utc_ms(end_dt)
+    tf_ms = _INTERVAL_MS.get(interval, 300_000)
     rows: list = []
-    while since_ms < end_ms:
+    seen_open: set[int] = set()
+    max_pages = 64
+    pages = 0
+    while since_ms < end_ms and pages < max_pages:
         batch = exchange.fetch_ohlcv(market_symbol, interval, since=since_ms, limit=1000)
+        pages += 1
         if not batch:
             break
-        rows.extend(batch)
+        for candle in batch:
+            open_ms = int(candle[0])
+            if open_ms not in seen_open:
+                seen_open.add(open_ms)
+                rows.append(candle)
         last_open = int(batch[-1][0])
-        since_ms = last_open + 1
-        if len(batch) < 1000 or last_open >= end_ms:
+        next_since = last_open + tf_ms
+        if next_since <= since_ms:
+            break
+        since_ms = next_since
+        if last_open >= end_ms - tf_ms:
             break
 
     if not rows:
@@ -262,7 +304,7 @@ def _fetch_ccxt_ohlcv_from_exchange(
     df["Date"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_localize(None)
     for col in ("Open", "High", "Low", "Close", "Volume"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["Close"]).sort_values("Date").reset_index(drop=True)
+    df = df.drop_duplicates(subset=["Date"]).dropna(subset=["Close"]).sort_values("Date").reset_index(drop=True)
     return _slice_window(df, start_dt, end_dt)
 
 
@@ -271,10 +313,11 @@ def _fetch_ccxt_ohlcv(
     start_dt: datetime,
     end_dt: datetime,
     interval: str,
+    config: dict | None = None,
 ) -> pd.DataFrame:
     pair_display = parse_crypto_pair(symbol).display
     errors: list[str] = []
-    for exchange_id in _ccxt_exchange_ids():
+    for exchange_id in ccxt_exchange_ids(config):
         try:
             return _fetch_ccxt_ohlcv_from_exchange(
                 exchange_id, symbol, start_dt, end_dt, interval
@@ -337,6 +380,54 @@ def fetch_ccxt_spot_ticker(
     return price, market_symbol
 
 
+def _skip_cryptocompare(cfg: dict | None) -> bool:
+    """True when CryptoCompare should be omitted from the OHLCV vendor chain."""
+    if cfg is not None and "backtest_skip_cryptocompare" in cfg:
+        return bool(cfg["backtest_skip_cryptocompare"])
+    raw = os.environ.get("BACKTEST_SKIP_CRYPTOCOMPARE", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _build_ohlcv_vendors(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    binance_interval: str,
+    cc_endpoint: str,
+    resample_rule: str | None,
+    config: dict | None,
+) -> list[tuple[str, Callable[[], pd.DataFrame]]]:
+    """Ordered OHLCV vendor chain — ccxt → Binance → CryptoCompare (optional last)."""
+    cfg = config or {}
+    vendors: list[tuple[str, Callable[[], pd.DataFrame]]] = []
+
+    for exchange_id in ccxt_exchange_ids(config):
+        vendors.append(
+            (
+                exchange_id,
+                lambda ex=exchange_id: _fetch_ccxt_ohlcv_from_exchange(
+                    ex, symbol, start_dt, end_dt, binance_interval
+                ),
+            )
+        )
+    vendors.append(
+        (
+            "Binance",
+            lambda: _fetch_binance_ohlcv(symbol, start_dt, end_dt, binance_interval),
+        )
+    )
+    if not _skip_cryptocompare(cfg):
+        vendors.append(
+            (
+                "CryptoCompare",
+                lambda: _fetch_cryptocompare_ohlcv(
+                    symbol, start_dt, end_dt, cc_endpoint, resample_rule
+                ),
+            )
+        )
+    return vendors
+
+
 def fetch_intraday_ohlcv(
     symbol: str,
     start_dt: datetime,
@@ -346,8 +437,14 @@ def fetch_intraday_ohlcv(
     live_mode: bool = False,
     config: dict | None = None,
     on_provider: Optional[Callable[[str, int], None]] = None,
+    on_provider_attempt: Optional[Callable[[str, int, bool, str], None]] = None,
+    min_bars: int = 30,
 ) -> pd.DataFrame:
-    """Fetch OHLCV for a backtest window via CryptoCompare → Binance → ccxt."""
+    """Fetch OHLCV for a backtest window via ccxt → Binance → CryptoCompare (optional).
+
+    Tries the next vendor when a source returns too few bars or errors.
+    ``on_provider_attempt(vendor, bars, ok, detail)`` fires for every try.
+    """
     if granularity_seconds not in _VENDOR_SPECS:
         raise BacktestDataError(
             f"Unsupported candle granularity {granularity_seconds}s for backtest OHLCV."
@@ -356,66 +453,52 @@ def fetch_intraday_ohlcv(
     binance_interval, cc_endpoint, resample_rule = _VENDOR_SPECS[granularity_seconds]
     pair_display = parse_crypto_pair(symbol).display
     errors: list[str] = []
-    ccxt_label = "ccxt (" + ", ".join(_ccxt_exchange_ids()) + ")"
 
-    vendors: Sequence[tuple[str, Callable[[], pd.DataFrame]]] = [
-        (
-            "CryptoCompare",
-            lambda: _fetch_cryptocompare_ohlcv(
-                symbol, start_dt, end_dt, cc_endpoint, resample_rule
-            ),
-        ),
-        (
-            "Binance",
-            lambda: _fetch_binance_ohlcv(symbol, start_dt, end_dt, binance_interval),
-        ),
-        (
-            ccxt_label,
-            lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
-        ),
-    ]
-    cfg = config or {}
-    if cfg.get("backtest_prefer_binance") or os.environ.get("BACKTEST_PREFER_BINANCE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    ):
-        vendors = [
-            (
-                "Binance",
-                lambda: _fetch_binance_ohlcv(symbol, start_dt, end_dt, binance_interval),
-            ),
-            (
-                ccxt_label,
-                lambda: _fetch_ccxt_ohlcv(symbol, start_dt, end_dt, binance_interval),
-            ),
-            (
-                "CryptoCompare",
-                lambda: _fetch_cryptocompare_ohlcv(
-                    symbol, start_dt, end_dt, cc_endpoint, resample_rule
-                ),
-            ),
-        ]
+    def _emit_attempt(vendor: str, bars: int, ok: bool, detail: str) -> None:
+        if on_provider_attempt is not None:
+            on_provider_attempt(vendor, bars, ok, detail)
+
+    vendors = _build_ohlcv_vendors(
+        symbol,
+        start_dt,
+        end_dt,
+        binance_interval,
+        cc_endpoint,
+        resample_rule,
+        config,
+    )
 
     for name, fetcher in vendors:
         try:
             df = fetcher()
             if df is not None and not df.empty:
-                logger.debug(
-                    "Backtest OHLCV for %s via %s: %d bars",
-                    pair_display,
-                    name,
-                    len(df),
-                )
-                if on_provider is not None:
-                    on_provider(name, len(df))
-                return df
-            errors.append(f"{name}: empty dataframe")
+                bar_count = len(df)
+                if bar_count >= min_bars:
+                    logger.debug(
+                        "Backtest OHLCV for %s via %s: %d bars",
+                        pair_display,
+                        name,
+                        bar_count,
+                    )
+                    _emit_attempt(name, bar_count, True, f"{bar_count} bars")
+                    if on_provider is not None:
+                        on_provider(name, bar_count)
+                    return df
+                detail = f"only {bar_count} bars (need {min_bars})"
+                errors.append(f"{name}: {detail}")
+                _emit_attempt(name, bar_count, False, detail)
+                continue
+            detail = "empty dataframe"
+            errors.append(f"{name}: {detail}")
+            _emit_attempt(name, 0, False, detail)
         except NoMarketDataError as exc:
-            errors.append(f"{name}: {exc.detail or exc}")
+            detail = str(exc.detail or exc)
+            errors.append(f"{name}: {detail}")
+            _emit_attempt(name, 0, False, detail)
         except Exception as exc:
-            errors.append(f"{name}: {exc}")
+            detail = str(exc)
+            errors.append(f"{name}: {detail}")
+            _emit_attempt(name, 0, False, detail)
 
     hints = [
         "Check network connectivity and API keys (CRYPTOCOMPARE_API_KEY).",

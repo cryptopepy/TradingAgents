@@ -342,26 +342,35 @@ class PaperTradingEngine:
             self.on_state_change(state)
         return True
 
-    def _run_adaptive_rebacktest(self, now: datetime) -> None:
-        """Re-run optimization and switch strategy when a better one is found."""
-        self._adaptive.note_drawdown_review(now)
-        drawdown = self._adaptive.current_drawdown_pct()
-        end_date = now.strftime("%Y-%m-%d")
-        logger.info(
-            "Adaptive re-backtest triggered for %s (drawdown %.2f%%)",
-            self.session.symbol,
-            drawdown,
+    def reanalyze(self) -> None:
+        """Re-run strategy optimization without closing the open position."""
+        quote = self._fetch_price()
+        now = quote.timestamp
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        from tradingagents.simulator.activity_messages import format_reanalyze_banner
+
+        self._run_optimization_cycle(
+            now,
+            banner=format_reanalyze_banner(),
+            winner_prefix="Reanalyze winner",
+            adaptive_followup=False,
+            fail_label="Reanalyze failed",
+            not_deployable_label="Reanalyze complete — not deployable",
         )
+        state = self.get_state(quote)
+        self._persist_session(quote)
+        if self.on_state_change:
+            self.on_state_change(state)
+
+    def _make_horizon_callbacks(self):
         from tradingagents.simulator.activity_messages import (
-            format_drawdown_rebacktest_banner,
             format_horizon_complete,
             format_horizon_skipped,
             format_horizon_start,
-            format_optimization_winner,
+            format_horizon_worst,
+            format_provider_attempt,
         )
-
-        self._emit_activity(format_drawdown_rebacktest_banner(drawdown))
-        self._signals_halted = True
 
         def _on_horizon_start(lookback: LookbackWindow) -> None:
             self._log_backtest_activity(format_horizon_start(lookback.value))
@@ -382,46 +391,34 @@ class PaperTradingEngine:
                     cache_hit=cache_hit,
                 )
             )
+            worst_line = format_horizon_worst(lookback.value, metrics)
+            if worst_line:
+                self._log_backtest_activity(worst_line)
 
         def _on_horizon_skipped(lookback: LookbackWindow, reason: str) -> None:
             self._log_backtest_activity(format_horizon_skipped(lookback.value, reason))
 
-        try:
-            optimization = optimize_strategies(
-                self.session.symbol,
-                end_date,
-                config=self.config,
-                stop_loss_pct=self.session.stop_loss_pct,
-                take_profit_pct=self.session.take_profit_pct,
-                transaction_cost_pct=self.session.slippage_bps / 10_000.0,
-                on_horizon_start=_on_horizon_start,
-                on_horizon_complete=_on_horizon_complete,
-                on_horizon_skipped=_on_horizon_skipped,
+        def _on_horizon_provider_attempt(
+            lookback: LookbackWindow,
+            vendor: str,
+            bars: int,
+            ok: bool,
+            detail: str,
+        ) -> None:
+            self._log_backtest_activity(
+                format_provider_attempt(lookback.value, vendor, bars, ok, detail)
             )
-        except Exception as exc:
-            logger.warning("Adaptive re-backtest failed: %s", exc)
-            self._emit_activity(f"Re-backtest failed — {exc}")
-            self._signals_halted = False
-            return
 
-        if optimization.winner is None or not optimization.deployable:
-            reason = (
-                "; ".join(optimization.gate_failures)
-                if optimization.gate_failures
-                else "no winning strategy found"
-            )
-            self._emit_activity(f"Re-backtest complete — not deployable ({reason})")
-            on_fail = self.config.get("winner_on_gate_fail", "keep")
-            if on_fail == "flat":
-                self.session.signal = StrategySignal.FLAT
-            self._adaptive.mark_rebacktest_done(now)
-            self._signals_halted = False
-            return
-
-        self._emit_activity(
-            format_optimization_winner(optimization.winner, prefix="Re-backtest winner")
+        return (
+            _on_horizon_start,
+            _on_horizon_complete,
+            _on_horizon_skipped,
+            _on_horizon_provider_attempt,
         )
 
+    def _deploy_optimization_winner(self, optimization: OptimizationResult, end_date: str) -> None:
+        if optimization.winner is None:
+            return
         old_name = self.session.strategy_name
         old_lookback = self.session.lookback
         new_name = optimization.winner.strategy_name
@@ -456,8 +453,85 @@ class PaperTradingEngine:
                 f"Lookback refreshed: {old_lookback} → {optimization.winner.lookback}"
             )
 
-        self._adaptive.mark_rebacktest_done(now)
+    def _run_optimization_cycle(
+        self,
+        now: datetime,
+        *,
+        banner: str,
+        winner_prefix: str,
+        adaptive_followup: bool,
+        fail_label: str,
+        not_deployable_label: str,
+    ) -> None:
+        """Re-run optimization, log horizon results, and deploy a winner when allowed."""
+        end_date = now.strftime("%Y-%m-%d")
+        from tradingagents.simulator.activity_messages import format_optimization_winner
+
+        self._emit_activity(banner)
+        self._signals_halted = True
+        on_start, on_complete, on_skipped, on_provider = self._make_horizon_callbacks()
+
+        try:
+            optimization = optimize_strategies(
+                self.session.symbol,
+                end_date,
+                config=self.config,
+                stop_loss_pct=self.session.stop_loss_pct,
+                take_profit_pct=self.session.take_profit_pct,
+                transaction_cost_pct=self.session.slippage_bps / 10_000.0,
+                on_horizon_start=on_start,
+                on_horizon_complete=on_complete,
+                on_horizon_skipped=on_skipped,
+                on_horizon_provider_attempt=on_provider,
+            )
+        except Exception as exc:
+            logger.warning("%s: %s", fail_label, exc)
+            self._emit_activity(f"{fail_label} — {exc}")
+            self._signals_halted = False
+            return
+
+        if optimization.winner is None or not optimization.deployable:
+            reason = (
+                "; ".join(optimization.gate_failures)
+                if optimization.gate_failures
+                else "no winning strategy found"
+            )
+            self._emit_activity(f"{not_deployable_label} ({reason})")
+            on_fail = self.config.get("winner_on_gate_fail", "keep")
+            if on_fail == "flat":
+                self.session.signal = StrategySignal.FLAT
+            if adaptive_followup:
+                self._adaptive.mark_rebacktest_done(now)
+            self._signals_halted = False
+            return
+
+        self._emit_activity(
+            format_optimization_winner(optimization.winner, prefix=winner_prefix)
+        )
+        self._deploy_optimization_winner(optimization, end_date)
+        if adaptive_followup:
+            self._adaptive.mark_rebacktest_done(now)
         self._signals_halted = False
+
+    def _run_adaptive_rebacktest(self, now: datetime) -> None:
+        """Re-run optimization and switch strategy when a better one is found."""
+        self._adaptive.note_drawdown_review(now)
+        drawdown = self._adaptive.current_drawdown_pct()
+        logger.info(
+            "Adaptive re-backtest triggered for %s (drawdown %.2f%%)",
+            self.session.symbol,
+            drawdown,
+        )
+        from tradingagents.simulator.activity_messages import format_drawdown_rebacktest_banner
+
+        self._run_optimization_cycle(
+            now,
+            banner=format_drawdown_rebacktest_banner(drawdown),
+            winner_prefix="Re-backtest winner",
+            adaptive_followup=True,
+            fail_label="Re-backtest failed",
+            not_deployable_label="Re-backtest complete — not deployable",
+        )
 
     def get_state(self, quote: Optional[LivePrice] = None) -> PaperTradingState:
         """Current portfolio and session snapshot."""
@@ -520,6 +594,8 @@ class PaperTradingEngine:
                     break
                 if key == "c":
                     self.close_open_position(reoptimize=True)
+                if key == "r":
+                    self.reanalyze()
         except KeyboardInterrupt:
             self._stop_event.set()
 

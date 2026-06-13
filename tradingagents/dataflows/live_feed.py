@@ -194,7 +194,7 @@ class LiveFeedRouter:
             self._record_attempt(attempts, "cryptocompare", False, self._attempt_detail(exc))
 
         # 2. ccxt exchange tickers (real-time; preferred over CoinGecko for paper)
-        exchange_ids = list(ccxt_exchange_ids())
+        exchange_ids = list(ccxt_exchange_ids(self.config))
         if use_binance is False:
             exchange_ids = [x for x in exchange_ids if x != "binance"]
         for exchange_id in exchange_ids:
