@@ -31,7 +31,7 @@ from tradingagents.simulator import PaperTradingEngine, PaperTradingState, sessi
 
 console = Console()
 
-PAPER_CONTROLS_TEXT = "Controls: (c) Close and reassess · (q) quit"
+PAPER_CONTROLS_TEXT = "Controls: (c) Close and retest · (q) quit"
 
 
 def render_paper_state_table(state: PaperTradingState) -> Table:
