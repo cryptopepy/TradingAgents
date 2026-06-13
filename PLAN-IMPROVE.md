@@ -338,24 +338,24 @@ Implement after P0–P2 stable. Pick sub-tasks incrementally.
 
 ### Tasks
 
-- [ ] **IMPROVE-7.1** — Position sizing (`sizing_pct`, vol scaling)
+- [x] **IMPROVE-7.1** — Position sizing (`sizing_pct`, vol scaling)
   - Use `TransactionIntent.sizing_pct` (`portfolio.py` ~106–108); default 100%, optional ATR-based scale.
   - Env: `TRADINGAGENTS_POSITION_SIZE_PCT=1.0`.
 
-- [ ] **IMPROVE-7.2** — Min trade interval / cooldown
+- [x] **IMPROVE-7.2** — Min trade interval / cooldown
   - Suppress signal flip within N bars after exit (reduce EMA churn on 5m).
   - Env: `TRADINGAGENTS_MIN_BARS_BETWEEN_TRADES=3`.
 
-- [ ] **IMPROVE-7.3** — Regime filter (meta-strategy)
+- [x] **IMPROVE-7.3** — Regime filter (meta-strategy)
   - ADX gate: mean-revert only when ADX < 20; trend only when ADX > 25.
   - New strategy `regime_switch` or filter wrapper in `build_strategy`.
 
-- [ ] **IMPROVE-7.4** — Shorter horizons / 1m bars (research only)
+- [ ] **IMPROVE-7.4** — Shorter horizons / 1m bars (deferred — high overfitting risk)
   - New `LookbackWindow.H1 = "1h"` with 1m granularity — **high overfitting risk**.
   - Requires vendor support audit in `historical_data.py`.
   - Ship behind `TRADINGAGENTS_ENABLE_1M_BARS=false`.
 
-- [ ] **IMPROVE-7.5** — Composite winner score (optional alternative to pure `net_profit_ratio`)
+- [x] **IMPROVE-7.5** — Composite winner score (optional alternative to pure `net_profit_ratio`)
   - e.g. `score = net_profit_ratio * min(profit_factor, 3) / (1 + max_drawdown)`.
   - Env-selectable: `TRADINGAGENTS_WINNER_SCORE=net_profit` | `composite`.
 
@@ -451,7 +451,7 @@ Users can improve behavior today without code changes:
 - [x] IMPROVE-6: Walk-forward validation
 
 ### P3 — Optional
-- [ ] IMPROVE-7: Sizing, cooldown, regime, 1m bars, composite score
+- [x] IMPROVE-7: Sizing, cooldown, regime, composite score (7.4 1m bars deferred)
 
 ### Docs
 - [ ] DOC-1 through DOC-4
