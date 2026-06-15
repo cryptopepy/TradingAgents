@@ -1,4 +1,4 @@
-# TradingAgents
+# CryptoTradingAgents
 
 **Crypto research, backtesting, and paper trading** — with optional multi-agent LLM analysis.
 
