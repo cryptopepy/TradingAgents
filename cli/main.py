@@ -30,7 +30,6 @@ from tradingagents.graph.analyst_execution import (
 from tradingagents.default_config import DEFAULT_CONFIG
 from cli.models import AnalystType
 from cli.utils import *
-from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
 from cli.post_analysis import show_post_analysis_menu
 
@@ -477,11 +476,11 @@ def get_user_selections():
 
     # Create welcome box content
     welcome_content = f"{welcome_ascii}\n"
-    welcome_content += "[bold green]TradingAgents: Multi-Agents LLM Financial Trading Framework - CLI[/bold green]\n\n"
-    welcome_content += "[bold]Workflow Steps:[/bold]\n"
-    welcome_content += "I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management\n\n"
+    welcome_content += "[bold green]CryptoTradingAgents: Crypto-only Kinda LLM Financial Paper Trading Framework - CLI[/bold green]\n\n"
+    welcome_content += "[bold]The analysts are dumb. The backtesting is better.[/bold]\n"
+    welcome_content += "[strike]I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management[/strike]\n\n"
     welcome_content += (
-        "[dim]Built by [Tauric Research](https://github.com/TauricResearch)[/dim]"
+        "[dim]Built by [Tauric Research](https://github.com/TauricResearch), modified by cryptopepy. v1.1.2[/dim]"
     )
 
     # Create and center the welcome box
@@ -495,10 +494,6 @@ def get_user_selections():
     console.print(Align.center(welcome_box))
     console.print()
     console.print()  # Add vertical space before announcements
-
-    # Fetch and display announcements (silent on failure)
-    announcements = fetch_announcements()
-    display_announcements(console, announcements)
 
     # Create a boxed questionnaire for each step
     def create_question_box(title, prompt, default=None):
