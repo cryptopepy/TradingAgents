@@ -182,6 +182,70 @@ class TestCloseOpenPosition:
 
 
 @pytest.mark.unit
+class TestPaperConfirmPrompts:
+    def test_footer_shows_confirm_prompt(self):
+        from datetime import datetime, timezone
+
+        from tradingagents.simulator.activity_messages import format_close_retest_confirm_prompt
+        from tradingagents.simulator.paper_engine import PaperTradingState
+
+        state = PaperTradingState(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            lookback="24h",
+            signal="flat",
+            equity=10_000.0,
+            cash=10_000.0,
+            initial_equity=10_000.0,
+            pnl=0.0,
+            pnl_pct=0.0,
+            price=50_000.0,
+            price_source="placeholder",
+            drawdown_pct=0.0,
+            rebacktest_count=0,
+            timestamp=datetime.now(timezone.utc),
+        )
+        ctx = PaperDisplayContext(status_prompt=format_close_retest_confirm_prompt())
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(
+            render_paper_live_display(state, display_ctx=ctx)
+        )
+        rendered = buffer.getvalue()
+        assert format_close_retest_confirm_prompt() in rendered
+        assert PAPER_CONTROLS_TEXT not in rendered
+
+    def test_footer_shows_busy_label(self):
+        from datetime import datetime, timezone
+
+        from tradingagents.simulator.paper_engine import PaperTradingState
+
+        state = PaperTradingState(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            lookback="24h",
+            signal="flat",
+            equity=10_000.0,
+            cash=10_000.0,
+            initial_equity=10_000.0,
+            pnl=0.0,
+            pnl_pct=0.0,
+            price=50_000.0,
+            price_source="placeholder",
+            drawdown_pct=0.0,
+            rebacktest_count=0,
+            timestamp=datetime.now(timezone.utc),
+        )
+        ctx = PaperDisplayContext(busy_label="Reanalyze")
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(
+            render_paper_live_display(state, display_ctx=ctx)
+        )
+        rendered = buffer.getvalue()
+        assert "Reanalyze" in rendered
+        assert "please wait" in rendered
+
+
+@pytest.mark.unit
 class TestRunLoopKeyboard:
     @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
     @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")

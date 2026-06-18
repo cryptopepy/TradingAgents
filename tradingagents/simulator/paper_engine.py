@@ -93,6 +93,7 @@ class PaperTradingEngine:
         self._tick_history: List[TickEvaluationResult] = []
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._operation_lock = threading.RLock()
         self._signals_halted = False
         self._feed_unavailable = False
         self._last_good_quote: Optional[LivePrice] = None
@@ -170,6 +171,27 @@ class PaperTradingEngine:
             timestamp=datetime.now(timezone.utc),
             endpoint="unavailable",
         )
+
+    def _tick_busy_skipped(self) -> TickEvaluationResult:
+        """Hold the session steady while a manual action runs in the background."""
+        now = datetime.now(timezone.utc)
+        display = self._quote_for_display(None)
+        if display.price > 0 and self.session.symbol in self.portfolio.positions:
+            self.portfolio.mark_to_market({self.session.symbol: display.price})
+
+        result = TickEvaluationResult(
+            timestamp=now,
+            price=display.price,
+            signal=StrategySignal.FLAT,
+            action_taken="busy",
+            portfolio_equity=self.portfolio.equity,
+        )
+        self._tick_history.append(result)
+        self._adaptive.record_equity(result.portfolio_equity, now)
+        state = self.get_state(display)
+        if self.on_state_change:
+            self.on_state_change(state)
+        return result
 
     def _tick_feed_unavailable(self) -> TickEvaluationResult:
         """Skip trading when vendors fail; keep session alive for the next tick."""
@@ -321,6 +343,14 @@ class PaperTradingEngine:
 
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""
+        if not self._operation_lock.acquire(blocking=False):
+            return self._tick_busy_skipped()
+        try:
+            return self._tick_locked()
+        finally:
+            self._operation_lock.release()
+
+    def _tick_locked(self) -> TickEvaluationResult:
         quote = self._fetch_price()
         if quote is None:
             return self._tick_feed_unavailable()
@@ -360,63 +390,79 @@ class PaperTradingEngine:
 
     def close_open_position(self, *, reoptimize: bool = True) -> bool:
         """Close the open position at the current mark price and optionally re-optimize."""
-        if self.session.symbol not in self.portfolio.positions:
-            return False
+        with self._operation_lock:
+            if self.session.symbol not in self.portfolio.positions:
+                self._emit_activity("Close & retest skipped — no open position")
+                return False
 
-        quote = self._fetch_price() or self._last_good_quote
-        if quote is None or quote.price <= 0:
-            self._emit_activity("Cannot close position — live price unavailable")
-            return False
-        now = quote.timestamp
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
+            quote = self._fetch_price() or self._last_good_quote
+            if quote is None or quote.price <= 0:
+                self._emit_activity("Cannot close position — live price unavailable")
+                return False
+            now = quote.timestamp
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
 
-        self.portfolio.mark_to_market({self.session.symbol: quote.price})
-        self.matcher.submit_intent(
-            TransactionIntent(
-                timestamp=now,
-                asset=self.session.symbol,
-                direction=Direction.EXIT,
-            ),
-            reference_price=quote.price,
-        )
-        self.portfolio.mark_to_market({self.session.symbol: quote.price})
-        from tradingagents.simulator.activity_messages import format_tick_action
+            self.portfolio.mark_to_market({self.session.symbol: quote.price})
+            self.matcher.submit_intent(
+                TransactionIntent(
+                    timestamp=now,
+                    asset=self.session.symbol,
+                    direction=Direction.EXIT,
+                ),
+                reference_price=quote.price,
+            )
+            self.portfolio.mark_to_market({self.session.symbol: quote.price})
+            from tradingagents.simulator.activity_messages import format_tick_action
 
-        self._emit_activity(
-            format_tick_action("manual_close", quote.price, self.portfolio.equity)
-        )
-        self._adaptive.record_equity(self.portfolio.equity, now)
+            self._emit_activity(
+                format_tick_action("manual_close", quote.price, self.portfolio.equity)
+            )
+            self._adaptive.record_equity(self.portfolio.equity, now)
 
-        if reoptimize:
-            self._run_adaptive_rebacktest(now)
+            if reoptimize:
+                self._run_manual_rebacktest(now)
 
-        state = self.get_state(quote)
-        self._persist_session(quote)
-        if self.on_state_change:
-            self.on_state_change(state)
-        return True
+            state = self.get_state(quote)
+            self._persist_session(quote)
+            if self.on_state_change:
+                self.on_state_change(state)
+            return True
 
     def reanalyze(self) -> None:
         """Re-run strategy optimization without closing the open position."""
-        quote = self._fetch_price() or self._last_good_quote
-        now = datetime.now(timezone.utc)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        from tradingagents.simulator.activity_messages import format_reanalyze_banner
+        with self._operation_lock:
+            quote = self._fetch_price() or self._last_good_quote
+            now = datetime.now(timezone.utc)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            from tradingagents.simulator.activity_messages import format_reanalyze_banner
+
+            self._run_optimization_cycle(
+                now,
+                banner=format_reanalyze_banner(),
+                winner_prefix="Reanalyze winner",
+                adaptive_followup=False,
+                fail_label="Reanalyze failed",
+                not_deployable_label="Reanalyze complete — not deployable",
+            )
+            state = self.get_state(quote)
+            self._persist_session(quote)
+            if self.on_state_change:
+                self.on_state_change(state)
+
+    def _run_manual_rebacktest(self, now: datetime) -> None:
+        """Re-run optimization after a manual close (not an adaptive drawdown review)."""
+        from tradingagents.simulator.activity_messages import format_close_retest_banner
 
         self._run_optimization_cycle(
             now,
-            banner=format_reanalyze_banner(),
-            winner_prefix="Reanalyze winner",
+            banner=format_close_retest_banner(),
+            winner_prefix="Close & retest winner",
             adaptive_followup=False,
-            fail_label="Reanalyze failed",
-            not_deployable_label="Reanalyze complete — not deployable",
+            fail_label="Close & retest failed",
+            not_deployable_label="Close & retest complete — not deployable",
         )
-        state = self.get_state(quote)
-        self._persist_session(quote)
-        if self.on_state_change:
-            self.on_state_change(state)
 
     def _make_horizon_callbacks(self):
         from tradingagents.simulator.activity_messages import (

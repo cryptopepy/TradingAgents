@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import signal
+import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from rich.columns import Columns
 from rich.console import Console, Group
@@ -23,7 +24,9 @@ from cli.movers_board import MoversBoard
 from cli.paper_display import PaperDisplayContext, render_market_panel
 from cli.price_history import PriceHistoryLog
 from tradingagents.simulator.activity_messages import (
+    format_close_retest_confirm_prompt,
     format_optimization_winner,
+    format_reanalyze_confirm_prompt,
     format_session_start,
 )
 
@@ -93,10 +96,6 @@ def render_paper_live_display(
 ) -> Group:
     """Rich live view: activity log, status + market + price history, optional movers overlay."""
     ctx = display_ctx or PaperDisplayContext()
-    controls = Text(
-        MOVERS_CONTROLS_TEXT if ctx.show_movers else PAPER_CONTROLS_TEXT,
-        style="dim",
-    )
     parts = []
     if log is not None and log.enabled:
         parts.append(log.render_panel())
@@ -137,8 +136,17 @@ def render_paper_live_display(
                 equal=False,
             )
         )
-    parts.append(controls)
+    parts.append(_render_footer_controls(ctx))
     return Group(*parts)
+
+
+def _render_footer_controls(ctx: PaperDisplayContext) -> Text:
+    if ctx.busy_label:
+        return Text(f"⏳ {ctx.busy_label} — please wait", style="bold cyan")
+    if ctx.status_prompt:
+        return Text(ctx.status_prompt, style="bold yellow")
+    controls = MOVERS_CONTROLS_TEXT if ctx.show_movers else PAPER_CONTROLS_TEXT
+    return Text(controls, style="dim")
 
 
 def _bootstrap_paper_state(ticker: str, cfg: dict) -> PaperTradingState:
@@ -348,8 +356,67 @@ def run_paper_session(
             display_ctx.seconds_until_next = interval
             _refresh_display()
 
+        confirm_state: dict = {"action": None}  # "close" | "reanalyze"
+        action_state: dict = {"running": False, "label": ""}
+
+        def _start_background_action(action_fn: Callable[[], object], label: str) -> None:
+            if action_state["running"]:
+                log.append(f"Already running {action_state['label']} — please wait")
+                _refresh_display()
+                return
+
+            action_state["running"] = True
+            action_state["label"] = label
+            display_ctx.busy_label = label
+            log.append(f"{label} — started")
+            _refresh_display()
+
+            def _worker() -> None:
+                try:
+                    result = action_fn()
+                    if label != "Close & retest" or result:
+                        log.append(f"{label} — complete")
+                except Exception as exc:
+                    log.append(f"{label} — failed: {exc}")
+                finally:
+                    action_state["running"] = False
+                    action_state["label"] = ""
+                    display_ctx.busy_label = None
+                    _refresh_display()
+
+            threading.Thread(target=_worker, name=f"paper-{label}", daemon=True).start()
+
+        def _cancel_confirm(message: str) -> None:
+            confirm_state["action"] = None
+            display_ctx.status_prompt = None
+            log.append(message)
+            _refresh_display()
+
         def _poll_key(timeout: float) -> Optional[str]:
             key = poll_stdin_key(timeout)
+            if confirm_state["action"]:
+                if key == "y":
+                    pending = confirm_state["action"]
+                    confirm_state["action"] = None
+                    display_ctx.status_prompt = None
+                    if pending == "close":
+                        log.append("Close & retest confirmed")
+                        _start_background_action(
+                            lambda: engine.close_open_position(reoptimize=True),
+                            "Close & retest",
+                        )
+                    elif pending == "reanalyze":
+                        log.append("Reanalyze confirmed")
+                        _start_background_action(engine.reanalyze, "Reanalyze")
+                    else:
+                        _refresh_display()
+                    return None
+                if key in ("n", "\x1b"):
+                    label = "Close & retest" if confirm_state["action"] == "close" else "Reanalyze"
+                    _cancel_confirm(f"{label} cancelled")
+                    return None
+                return None
+
             if key in ("\x1b", "\x1b\x1b"):
                 if display_ctx.show_movers:
                     display_ctx.show_movers = False
@@ -373,6 +440,26 @@ def run_paper_session(
                     movers_board.refresh(log.append, force=True)
                     _refresh_display()
                     return None
+            if key == "c":
+                if action_state["running"]:
+                    log.append(f"Busy with {action_state['label']} — please wait")
+                    _refresh_display()
+                    return None
+                confirm_state["action"] = "close"
+                display_ctx.status_prompt = format_close_retest_confirm_prompt()
+                log.append("Close & retest requested — press (y) to confirm or (n) to cancel")
+                _refresh_display()
+                return None
+            if key == "r":
+                if action_state["running"]:
+                    log.append(f"Busy with {action_state['label']} — please wait")
+                    _refresh_display()
+                    return None
+                confirm_state["action"] = "reanalyze"
+                display_ctx.status_prompt = format_reanalyze_confirm_prompt()
+                log.append("Reanalyze requested — press (y) to confirm or (n) to cancel")
+                _refresh_display()
+                return None
             return key
 
         latest_state = engine.get_state()
