@@ -39,7 +39,13 @@ from .walk_forward import (
     split_walk_forward,
     walk_forward_deployable,
 )
-from .winner_gate import select_winner, winner_gate_from_config, _risk_params_from_metric
+from .winner_gate import (
+    _risk_params_from_metric,
+    evaluate_winner_gate,
+    metric_selection_score,
+    select_winner,
+    winner_gate_from_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -985,6 +991,19 @@ def optimize_strategies(
             warnings.append(
                 "No deployable winner — " + "; ".join(gate_failures)
             )
+        elif winner_summary is not None:
+            best_overall = max(all_metrics, key=lambda m: metric_selection_score(m, cfg))
+            ok, failures = evaluate_winner_gate(best_overall, gate)
+            if not ok and (
+                best_overall.strategy_name != winner_summary.strategy_name
+                or best_overall.lookback != winner_summary.lookback
+            ):
+                reasons = "; ".join(failures)
+                warnings.append(
+                    "Winner gate excluded higher-scoring candidate "
+                    f"{best_overall.strategy_name} ({best_overall.lookback}) "
+                    f"net {best_overall.net_profit_ratio:+.2%}: {reasons}"
+                )
 
     if not all_metrics and not warnings:
         warnings.append(
