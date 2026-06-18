@@ -109,6 +109,18 @@ def format_reanalyze_banner() -> str:
     return "══ Reanalyze (r) — re-running backtest ══"
 
 
+def format_close_retest_banner() -> str:
+    return "══ Close & retest (c) — re-running backtest ══"
+
+
+def format_close_retest_confirm_prompt() -> str:
+    return "Close position & re-run backtest? (y/n)"
+
+
+def format_reanalyze_confirm_prompt() -> str:
+    return "Re-run backtest without closing position? (y/n)"
+
+
 def format_price_feed(
     source: str,
     price: float,

@@ -20,6 +20,8 @@ class PaperDisplayContext:
     kraken_status: str = ""
     fee_bps: Optional[float] = None
     show_movers: bool = False
+    status_prompt: Optional[str] = None
+    busy_label: Optional[str] = None
 
 
 def render_market_panel(
