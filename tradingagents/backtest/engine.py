@@ -548,8 +548,11 @@ def run_strategy_on_frame(
     dates = df["Date"].dt.strftime("%Y-%m-%d %H:%M").tolist()
 
     matcher = SimulatedMatcher(
-        slippage_bps=transaction_cost_pct * 10_000,
-        portfolio=VirtualPortfolio(initial_equity=1.0),
+        slippage_bps=0.0,
+        portfolio=VirtualPortfolio(
+            initial_equity=1.0,
+            fee_bps=transaction_cost_pct * 10_000.0,
+        ),
     )
 
     position = 0
@@ -783,7 +786,9 @@ def _evaluate_strategy_on_frame(
                 variant,
                 result,
             )
-            if best_metric is None or metric.net_profit_ratio > best_metric.net_profit_ratio:
+            if best_metric is None or metric_selection_score(metric, config) > metric_selection_score(
+                best_metric, config
+            ):
                 best_metric = metric
     return best_metric
 

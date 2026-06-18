@@ -29,6 +29,8 @@ def enrich_optimization_config(config: dict | None, symbol: str) -> dict:
     cfg.setdefault("atr_stops_enabled", True)
     cfg.setdefault("min_edge_filter_enabled", True)
     cfg.setdefault("winner_score_mode", "composite")
+    cfg.setdefault("winner_selection_mode", "multi_horizon")
+    cfg.setdefault("winner_require_long_horizon", True)
 
     if is_alt_symbol(symbol) and cfg.get("alt_auto_rich_optimization", True):
         cfg.setdefault("optimize_strategy_params", True)

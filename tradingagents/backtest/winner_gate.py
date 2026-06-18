@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .schemas import StrategyMetrics, WinningStrategySummary
+
+LOOKBACK_HOURS: Dict[str, float] = {
+    "8h": 8.0,
+    "24h": 24.0,
+    "7d": 168.0,
+}
+
+LOOKBACK_RANK: Dict[str, int] = {
+    "8h": 1,
+    "24h": 2,
+    "7d": 3,
+}
+
+DEFAULT_HORIZON_WEIGHTS: Dict[str, float] = {
+    "8h": 0.35,
+    "24h": 1.0,
+    "7d": 2.5,
+}
+
+LONG_HORIZONS = frozenset({"24h", "7d"})
 
 
 @dataclass(frozen=True)
@@ -28,13 +49,33 @@ def winner_gate_from_config(config: dict) -> WinnerGateConfig:
     )
 
 
+def horizon_weight(lookback: str, config: dict) -> float:
+    """Relative importance of a lookback window in pooled winner scoring."""
+    weights = config.get("winner_horizon_weights") or DEFAULT_HORIZON_WEIGHTS
+    return float(weights.get(lookback, DEFAULT_HORIZON_WEIGHTS.get(lookback, 1.0)))
+
+
+def time_normalized_return(metric: StrategyMetrics) -> float:
+    """Scale net return to a 24h-equivalent rate for fair cross-horizon comparison."""
+    hours = LOOKBACK_HOURS.get(metric.lookback, 24.0)
+    if hours <= 0:
+        return float(metric.net_profit_ratio)
+    return float(metric.net_profit_ratio) * (24.0 / hours)
+
+
 def metric_selection_score(metric: StrategyMetrics, config: dict) -> float:
     """Ranking key for winner selection (higher is better)."""
     mode = str(config.get("winner_score_mode", "net_profit")).strip().lower()
     if mode == "composite":
         pf = min(float(metric.profit_factor), 3.0)
-        return float(metric.net_profit_ratio) * pf / (1.0 + float(metric.max_drawdown))
-    return float(metric.net_profit_ratio)
+        base = float(metric.net_profit_ratio) * pf / (1.0 + float(metric.max_drawdown))
+    else:
+        base = float(metric.net_profit_ratio)
+
+    norm = time_normalized_return(metric)
+    win_rate_boost = 1.0 + min(float(metric.win_rate) / 100.0, 1.0) * 0.25
+    blended = (0.6 * base + 0.4 * norm) * win_rate_boost
+    return blended * horizon_weight(metric.lookback, config)
 
 
 def evaluate_winner_gate(
@@ -102,21 +143,17 @@ def metrics_to_winner_summary(
     )
 
 
-def select_winner(
+def _select_winner_flat(
     metrics: List[StrategyMetrics],
     gate: WinnerGateConfig,
     *,
     stop_loss_pct: float,
     take_profit_pct: Optional[float],
     transaction_cost_pct: float,
-    config: Optional[dict] = None,
+    config: dict,
 ) -> Tuple[Optional[WinningStrategySummary], List[str]]:
-    """Pick best deployable metric or return rejection reasons for the best overall."""
-    cfg = config or {}
-    score = lambda m: metric_selection_score(m, cfg)
-
-    if not metrics:
-        return None, ["no strategy metrics evaluated"]
+    """Legacy flat pool: best single strategy×horizon row."""
+    score = lambda m: metric_selection_score(m, config)
 
     best_overall = max(metrics, key=score)
     eligible = [m for m in metrics if evaluate_winner_gate(m, gate)[0]]
@@ -160,3 +197,118 @@ def select_winner(
         *failures,
     ]
     return None, summary_lines
+
+
+def _pick_representative_metric(
+    passing: List[StrategyMetrics],
+    config: dict,
+) -> StrategyMetrics:
+    """Prefer the longest lookback with solid risk-adjusted performance."""
+    score = lambda m: metric_selection_score(m, config)
+    return max(
+        passing,
+        key=lambda m: (LOOKBACK_RANK.get(m.lookback, 0), score(m)),
+    )
+
+
+def _select_winner_multi_horizon(
+    metrics: List[StrategyMetrics],
+    gate: WinnerGateConfig,
+    *,
+    stop_loss_pct: float,
+    take_profit_pct: Optional[float],
+    transaction_cost_pct: float,
+    config: dict,
+) -> Tuple[Optional[WinningStrategySummary], List[str]]:
+    """Pool per-strategy scores across horizons; require longer-horizon confirmation."""
+    require_long = bool(config.get("winner_require_long_horizon", True))
+    by_strategy: Dict[str, List[StrategyMetrics]] = defaultdict(list)
+    for metric in metrics:
+        by_strategy[metric.strategy_name].append(metric)
+
+    candidates: List[Tuple[float, StrategyMetrics]] = []
+    for rows in by_strategy.values():
+        passing = [m for m in rows if evaluate_winner_gate(m, gate)[0]]
+        if not passing:
+            continue
+
+        if require_long:
+            long_passing = [
+                m
+                for m in passing
+                if m.lookback in LONG_HORIZONS
+                and m.net_profit_ratio > gate.min_net_profit_ratio
+            ]
+            if not long_passing:
+                continue
+
+        pooled_score = sum(metric_selection_score(m, config) for m in passing)
+        representative = _pick_representative_metric(passing, config)
+        candidates.append((pooled_score, representative))
+
+    if candidates:
+        _, best_metric = max(candidates, key=lambda item: item[0])
+        sl, tp, cost = _risk_params_from_metric(
+            best_metric,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            transaction_cost_pct=transaction_cost_pct,
+        )
+        return (
+            metrics_to_winner_summary(
+                best_metric,
+                deployable=True,
+                stop_loss_pct=sl,
+                take_profit_pct=tp,
+                transaction_cost_pct=cost,
+            ),
+            [],
+        )
+
+    best_overall = max(metrics, key=lambda m: metric_selection_score(m, config))
+    _, failures = evaluate_winner_gate(best_overall, gate)
+    summary_lines = [
+        f"best overall: {best_overall.strategy_name} ({best_overall.lookback}) "
+        f"net={best_overall.net_profit_ratio * 100:.2f}%",
+        *failures,
+    ]
+    if require_long:
+        summary_lines.append(
+            "no strategy passed long-horizon confirmation (profitable 24h or 7d required)"
+        )
+    return None, summary_lines
+
+
+def select_winner(
+    metrics: List[StrategyMetrics],
+    gate: WinnerGateConfig,
+    *,
+    stop_loss_pct: float,
+    take_profit_pct: Optional[float],
+    transaction_cost_pct: float,
+    config: Optional[dict] = None,
+) -> Tuple[Optional[WinningStrategySummary], List[str]]:
+    """Pick best deployable metric or return rejection reasons for the best overall."""
+    cfg = config or {}
+    if not metrics:
+        return None, ["no strategy metrics evaluated"]
+
+    mode = str(cfg.get("winner_selection_mode", "multi_horizon")).strip().lower()
+    if mode == "multi_horizon":
+        return _select_winner_multi_horizon(
+            metrics,
+            gate,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            transaction_cost_pct=transaction_cost_pct,
+            config=cfg,
+        )
+
+    return _select_winner_flat(
+        metrics,
+        gate,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        transaction_cost_pct=transaction_cost_pct,
+        config=cfg,
+    )

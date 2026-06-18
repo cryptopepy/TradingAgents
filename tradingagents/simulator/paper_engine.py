@@ -15,6 +15,7 @@ from tradingagents.backtest import (
     compute_strategy_signal,
     optimize_strategies,
 )
+from tradingagents.backtest.engine import _last_closed_bar_dt
 from tradingagents.backtest.matcher import SimulatedMatcher
 from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
@@ -88,12 +89,13 @@ class PaperTradingEngine:
         self._pending_last_drawdown_review_at: Optional[datetime] = None
         self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
         self._restore_persisted_session()
-        self.matcher = SimulatedMatcher(slippage_bps=session.slippage_bps, portfolio=self.portfolio)
+        self.matcher = SimulatedMatcher(slippage_bps=0.0, portfolio=self.portfolio)
         self._dummy_feed: Optional[DummyPriceFeed] = None
         self._tick_history: List[TickEvaluationResult] = []
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._operation_lock = threading.RLock()
+        self._last_signal_bar: Optional[datetime] = None
         self._signals_halted = False
         self._feed_unavailable = False
         self._last_good_quote: Optional[LivePrice] = None
@@ -214,8 +216,19 @@ class PaperTradingEngine:
             self.on_state_change(state)
         return result
 
-    def refresh_signal(self) -> StrategySignal:
-        """Recompute strategy signal from latest historical candles."""
+    def refresh_signal(self, *, force: bool = False) -> StrategySignal:
+        """Recompute strategy signal when a new OHLCV bar has closed."""
+        lb = (
+            self.session.lookback
+            if isinstance(self.session.lookback, LookbackWindow)
+            else LookbackWindow(str(self.session.lookback))
+        )
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        bar_open = _last_closed_bar_dt(now, lb.granularity_seconds())
+        if not force and self._last_signal_bar == bar_open:
+            return self.session.signal
+        self._last_signal_bar = bar_open
+
         raw = compute_strategy_signal(
             self.session.symbol,
             self.session.strategy_name,
@@ -534,7 +547,9 @@ class PaperTradingEngine:
         self.session.stop_loss_pct = optimization.winner.stop_loss_pct
         self.session.take_profit_pct = optimization.winner.take_profit_pct
         self.session.slippage_bps = optimization.winner.transaction_cost_pct * 10_000.0
-        self.matcher.slippage_bps = self.session.slippage_bps
+        self.portfolio.fee_bps = self.session.slippage_bps
+        self.matcher.slippage_bps = 0.0
+        self._last_signal_bar = None
         self.session.signal = StrategySignal.from_string(
             compute_strategy_signal(
                 self.session.symbol,
@@ -542,6 +557,7 @@ class PaperTradingEngine:
                 self.session.parameters,
                 optimization.winner.lookback,
                 end_date,
+                config=self.config,
             )
         )
 

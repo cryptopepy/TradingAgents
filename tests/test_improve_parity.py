@@ -116,6 +116,8 @@ def test_select_winner_picks_best_deployable():
             net_profit_ratio=0.04,
             num_trades=6,
             max_drawdown=0.06,
+            profit_factor=1.6,
+            win_rate=55.0,
             parameters={
                 "_stop_loss_pct": 0.015,
                 "_take_profit_pct": 0.03,
@@ -129,6 +131,7 @@ def test_select_winner_picks_best_deployable():
         stop_loss_pct=0.02,
         take_profit_pct=None,
         transaction_cost_pct=0.001,
+        config={"winner_selection_mode": "flat"},
     )
     assert failures == []
     assert winner is not None
@@ -136,6 +139,91 @@ def test_select_winner_picks_best_deployable():
     assert winner.deployable
     assert winner.stop_loss_pct == pytest.approx(0.015)
     assert winner.take_profit_pct == pytest.approx(0.03)
+
+
+def test_multi_horizon_rejects_short_horizon_only_winner():
+    metrics = [
+        StrategyMetrics(
+            strategy_name="flash",
+            lookback="8h",
+            net_profit_ratio=0.10,
+            num_trades=5,
+            max_drawdown=0.03,
+            profit_factor=2.5,
+            win_rate=65.0,
+        ),
+        StrategyMetrics(
+            strategy_name="flash",
+            lookback="24h",
+            net_profit_ratio=-0.01,
+            num_trades=4,
+            max_drawdown=0.08,
+            profit_factor=0.9,
+            win_rate=40.0,
+        ),
+    ]
+    winner, failures = select_winner(
+        metrics,
+        WinnerGateConfig(),
+        stop_loss_pct=0.02,
+        take_profit_pct=None,
+        transaction_cost_pct=0.001,
+        config={
+            "winner_selection_mode": "multi_horizon",
+            "winner_require_long_horizon": True,
+            "winner_score_mode": "composite",
+        },
+    )
+    assert winner is None
+    assert any("long-horizon" in line for line in failures)
+
+
+def test_multi_horizon_prefers_stable_long_window():
+    metrics = [
+        StrategyMetrics(
+            strategy_name="steady",
+            lookback="8h",
+            net_profit_ratio=0.02,
+            num_trades=5,
+            max_drawdown=0.05,
+            profit_factor=1.4,
+            win_rate=52.0,
+        ),
+        StrategyMetrics(
+            strategy_name="steady",
+            lookback="7d",
+            net_profit_ratio=0.04,
+            num_trades=6,
+            max_drawdown=0.08,
+            profit_factor=1.7,
+            win_rate=58.0,
+        ),
+        StrategyMetrics(
+            strategy_name="flash",
+            lookback="8h",
+            net_profit_ratio=0.15,
+            num_trades=5,
+            max_drawdown=0.02,
+            profit_factor=3.0,
+            win_rate=70.0,
+        ),
+    ]
+    winner, failures = select_winner(
+        metrics,
+        WinnerGateConfig(),
+        stop_loss_pct=0.02,
+        take_profit_pct=None,
+        transaction_cost_pct=0.001,
+        config={
+            "winner_selection_mode": "multi_horizon",
+            "winner_require_long_horizon": True,
+            "winner_score_mode": "composite",
+        },
+    )
+    assert failures == []
+    assert winner is not None
+    assert winner.strategy_name == "steady"
+    assert winner.lookback == "7d"
 
 
 def test_param_search_returns_multiple_candidates_when_enabled():

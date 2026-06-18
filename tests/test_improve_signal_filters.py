@@ -76,7 +76,7 @@ def test_composite_score_prefers_better_risk_adjusted_metric():
         max_drawdown=0.05,
         num_trades=5,
     )
-    cfg = {"winner_score_mode": "composite"}
+    cfg = {"winner_score_mode": "composite", "winner_selection_mode": "flat"}
     assert metric_selection_score(low_dd, cfg) > metric_selection_score(high_dd, cfg)
 
     winner, _ = select_winner(

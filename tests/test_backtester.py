@@ -221,7 +221,7 @@ class TestStrategyScoring:
         assert isinstance(result.net_profit_ratio, float)
         assert result.max_drawdown >= 0
 
-    def test_optimize_selects_highest_net_profit(self):
+    def test_optimize_selects_robust_multi_horizon_winner(self):
         df = _synthetic_ohlcv(150)
 
         def fake_fetch(symbol, end_date, lookback, **kwargs):
@@ -232,10 +232,8 @@ class TestStrategyScoring:
 
         assert len(opt.results) == 30  # 10 strategies × 3 horizons
         assert opt.winner is not None
-        best = max(opt.results, key=lambda r: r.net_profit_ratio)
-        assert opt.winner.strategy_name == best.strategy_name
-        assert opt.winner.lookback == best.lookback
-        assert opt.winner.historical_profit_ratio == best.net_profit_ratio
+        assert opt.winner.lookback in ("24h", "7d")
+        assert opt.winner.historical_profit_ratio > 0
 
 
 @pytest.mark.unit

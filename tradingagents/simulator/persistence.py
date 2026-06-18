@@ -49,6 +49,7 @@ def save_paper_session(
         "signal": signal,
         "parameters": parameters or {},
         "initial_equity": portfolio.initial_equity,
+        "fee_bps": portfolio.fee_bps,
         "cash": portfolio.cash,
         "equity": portfolio.equity,
         "positions": portfolio.positions,

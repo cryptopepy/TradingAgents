@@ -118,15 +118,20 @@ class VirtualPortfolio:
         }
         self._recompute_equity()
 
+    def _position_notional(self, pos: Dict[str, Any]) -> float:
+        return pos["size"] * pos["entry_price"]
+
+    def _position_pnl(self, pos: Dict[str, Any], price: float) -> float:
+        move = (price - pos["entry_price"]) / pos["entry_price"]
+        if pos["side"] < 0:
+            move = -move
+        return self._position_notional(pos) * move * pos.get("leverage", 1.0)
+
     def _close_position(self, asset: str, price: float) -> None:
         pos = self.positions.pop(asset, None)
         if not pos:
             return
-        move = (price - pos["entry_price"]) / pos["entry_price"]
-        if pos["side"] < 0:
-            move = -move
-        notional_base = self.initial_equity * pos.get("sizing_pct", 1.0)
-        pnl = notional_base * move * pos.get("leverage", 1.0)
+        pnl = self._position_pnl(pos, price)
         self.cash += pnl
         self.equity = self.cash
         self._recompute_equity()
@@ -140,11 +145,7 @@ class VirtualPortfolio:
         unrealized = 0.0
         for asset, pos in self.positions.items():
             mark = self._last_prices.get(asset, pos["entry_price"])
-            move = (mark - pos["entry_price"]) / pos["entry_price"]
-            if pos["side"] < 0:
-                move = -move
-            notional_base = self.initial_equity * pos.get("sizing_pct", 1.0)
-            unrealized += notional_base * move * pos.get("leverage", 1.0)
+            unrealized += self._position_pnl(pos, mark)
         self.equity = self.cash + unrealized
 
     def snapshot(self, timestamp: Optional[datetime] = None) -> PortfolioSnapshot:
@@ -153,11 +154,7 @@ class VirtualPortfolio:
         positions: List[PositionSnapshot] = []
         for asset, pos in self.positions.items():
             mark = self._last_prices.get(asset, pos["entry_price"])
-            move = (mark - pos["entry_price"]) / pos["entry_price"]
-            if pos["side"] < 0:
-                move = -move
-            notional_base = self.initial_equity * pos.get("sizing_pct", 1.0)
-            upnl = notional_base * move * pos.get("leverage", 1.0)
+            upnl = self._position_pnl(pos, mark)
             positions.append(
                 PositionSnapshot(
                     asset=asset,
