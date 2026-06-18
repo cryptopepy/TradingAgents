@@ -94,6 +94,9 @@ class PaperTradingEngine:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._signals_halted = False
+        self._feed_unavailable = False
+        self._last_good_quote: Optional[LivePrice] = None
+        self._last_feed_warning_at: float = 0.0
         self._last_logged_price_source: Optional[str] = None
         self._price_feed_logged = False
 
@@ -133,18 +136,61 @@ class PaperTradingEngine:
         if self._dummy_feed is None:
             self._dummy_feed = DummyPriceFeed(anchor_price=anchor, symbol=self.session.symbol)
 
-    def _fetch_price(self) -> LivePrice:
+    def _fetch_price(self) -> Optional[LivePrice]:
+        """Return a live quote, or None when all vendors failed (no mock trading)."""
         quote = fetch_live_spot_price(self.session.symbol, self.config)
         if quote.source == PriceSource.PLACEHOLDER:
-            self._signals_halted = True
-            self._emit_activity(
-                "Price feed unavailable — signals halted (no placeholder/mock fills)"
-            )
-            raise RuntimeError(
-                f"Live price unavailable for {self.session.symbol}; "
-                "check API keys and network connectivity"
-            )
+            self._feed_unavailable = True
+            self._log_feed_unavailable()
+            return None
+        self._feed_unavailable = False
+        self._last_good_quote = quote
         return quote
+
+    def _log_feed_unavailable(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and (now - self._last_feed_warning_at) < 60.0:
+            return
+        self._last_feed_warning_at = now
+        detail = self._vendor_failure_summary()
+        msg = "Price feed unavailable — holding position, retrying next tick"
+        if detail:
+            msg = f"{msg} ({detail})"
+        self._emit_activity(msg)
+
+    def _quote_for_display(self, quote: Optional[LivePrice]) -> LivePrice:
+        if quote is not None:
+            return quote
+        if self._last_good_quote is not None:
+            return self._last_good_quote
+        return LivePrice(
+            symbol=self.session.symbol,
+            price=0.0,
+            source=PriceSource.PLACEHOLDER,
+            timestamp=datetime.now(timezone.utc),
+            endpoint="unavailable",
+        )
+
+    def _tick_feed_unavailable(self) -> TickEvaluationResult:
+        """Skip trading when vendors fail; keep session alive for the next tick."""
+        now = datetime.now(timezone.utc)
+        display = self._quote_for_display(None)
+        if display.price > 0 and self.session.symbol in self.portfolio.positions:
+            self.portfolio.mark_to_market({self.session.symbol: display.price})
+
+        result = TickEvaluationResult(
+            timestamp=now,
+            price=display.price,
+            signal=StrategySignal.FLAT,
+            action_taken="feed_unavailable",
+            portfolio_equity=self.portfolio.equity,
+        )
+        self._tick_history.append(result)
+        self._adaptive.record_equity(result.portfolio_equity, now)
+        state = self.get_state(display)
+        if self.on_state_change:
+            self.on_state_change(state)
+        return result
 
     def refresh_signal(self) -> StrategySignal:
         """Recompute strategy signal from latest historical candles."""
@@ -276,8 +322,14 @@ class PaperTradingEngine:
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""
         quote = self._fetch_price()
+        if quote is None:
+            return self._tick_feed_unavailable()
         self._log_price_feed(quote)
-        signal = self.refresh_signal() if not self._signals_halted else StrategySignal.FLAT
+        signal = (
+            self.refresh_signal()
+            if not self._signals_halted and not self._feed_unavailable
+            else StrategySignal.FLAT
+        )
         result = evaluate_live_market_tick(
             self.portfolio,
             quote.price,
@@ -311,7 +363,10 @@ class PaperTradingEngine:
         if self.session.symbol not in self.portfolio.positions:
             return False
 
-        quote = self._fetch_price()
+        quote = self._fetch_price() or self._last_good_quote
+        if quote is None or quote.price <= 0:
+            self._emit_activity("Cannot close position — live price unavailable")
+            return False
         now = quote.timestamp
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -344,8 +399,8 @@ class PaperTradingEngine:
 
     def reanalyze(self) -> None:
         """Re-run strategy optimization without closing the open position."""
-        quote = self._fetch_price()
-        now = quote.timestamp
+        quote = self._fetch_price() or self._last_good_quote
+        now = datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         from tradingagents.simulator.activity_messages import format_reanalyze_banner
@@ -540,7 +595,9 @@ class PaperTradingEngine:
     def get_state(self, quote: Optional[LivePrice] = None) -> PaperTradingState:
         """Current portfolio and session snapshot."""
         if quote is None:
-            quote = self._fetch_price()
+            quote = self._last_good_quote
+        if quote is None:
+            quote = self._quote_for_display(None)
         pos_desc = None
         if self.session.symbol in self.portfolio.positions:
             pos = self.portfolio.positions[self.session.symbol]

@@ -132,10 +132,52 @@ class TestPaperTradingEngine:
         )
         engine = PaperTradingEngine(session, adaptive_enabled=True)
         engine._adaptive.note_drawdown_review(now - timedelta(minutes=12))
-        state = engine.get_state()
+        state = engine.get_state(mock_price.return_value)
 
         assert state.last_drawdown_review == "12m ago"
         assert state.effective_drawdown_window_minutes == pytest.approx(60.0)
+
+    @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
+    @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
+    def test_tick_survives_transient_feed_outage(self, mock_price, _signal):
+        from datetime import datetime, timezone
+
+        good = LivePrice(
+            symbol="BTC/USDT",
+            price=50_000.0,
+            source=PriceSource.CRYPTOCOMPARE,
+            timestamp=datetime.now(timezone.utc),
+        )
+        bad = LivePrice(
+            symbol="BTC/USDT",
+            price=0.0,
+            source=PriceSource.PLACEHOLDER,
+            timestamp=datetime.now(timezone.utc),
+            endpoint="unavailable",
+        )
+        mock_price.side_effect = [good, bad, good]
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+        )
+        engine = PaperTradingEngine(
+            session,
+            {"paper_fresh_start": True, "paper_state_persistence": False},
+            adaptive_enabled=False,
+        )
+
+        first = engine.tick()
+        assert first.price == pytest.approx(50_000.0, rel=1e-4)
+
+        outage = engine.tick()
+        assert outage.action_taken == "feed_unavailable"
+        assert outage.price == pytest.approx(50_000.0, rel=1e-4)
+
+        recovered = engine.tick()
+        assert recovered.price == pytest.approx(50_000.0, rel=1e-4)
+        assert engine._feed_unavailable is False
 
     def test_fresh_start_ignores_saved_session(self, tmp_path):
         from tradingagents.simulator.persistence import save_paper_session
