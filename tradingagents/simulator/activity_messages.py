@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, Tuple
 
 from tradingagents.backtest.schemas import StrategyMetrics, WinningStrategySummary
 
@@ -107,6 +107,28 @@ def format_drawdown_rebacktest_banner(drawdown_pct: float) -> str:
 
 def format_volatility_spike_banner(reason: str) -> str:
     return f"══ Fast-move review ({reason}) — re-checking strategy ══"
+
+
+def format_spike_session_line(
+    *,
+    enabled: bool,
+    intelligent_tuning: bool,
+    windows: Sequence[Tuple[float, float]],
+    cooldown_minutes: float,
+) -> str:
+    if not enabled:
+        return "Fast-move review: off"
+    window_bits = ", ".join(f"{w:g}m/{thr:.1f}%" for w, thr in windows)
+    mode = "intelligent tuning on" if intelligent_tuning else "fixed thresholds"
+    return (
+        f"Fast-move review: on ({mode}) — watch {window_bits}; "
+        f"cooldown {cooldown_minutes:.0f}m"
+    )
+
+
+def format_spike_tuning_update(note: str, windows: Sequence[Tuple[float, float]]) -> str:
+    window_bits = ", ".join(f"{w:g}m/{thr:.1f}%" for w, thr in windows)
+    return f"Fast-move thresholds updated ({note}) — {window_bits}"
 
 
 def format_reanalyze_banner() -> str:

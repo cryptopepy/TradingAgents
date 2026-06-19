@@ -23,7 +23,10 @@ from tradingagents.resilience import DEFAULT_API_RETRY_DELAYS, retry_with_backof
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price, get_live_feed_router
 from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
-from tradingagents.simulator.volatility_spike import VolatilitySpikeMonitor
+from tradingagents.simulator.volatility_spike import (
+    VolatilitySpikeMonitor,
+    format_last_spike_review,
+)
 from tradingagents.simulator.core import (
     PaperTradingSession,
     StrategySignal,
@@ -62,6 +65,11 @@ class PaperTradingState:
     vendor_failures: str = ""
     last_drawdown_review: str = "Never"
     effective_drawdown_window_minutes: float = 0.0
+    spike_review_enabled: bool = False
+    spike_intelligent_tuning: bool = False
+    spike_status_line: str = "off"
+    last_spike_review: str = "Never"
+    spike_review_count: int = 0
     open_position: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -105,6 +113,7 @@ class PaperTradingEngine:
         self._last_feed_warning_at: float = 0.0
         self._last_logged_price_source: Optional[str] = None
         self._price_feed_logged = False
+        self._last_logged_spike_tuning: str = ""
 
         review_minutes = float(
             self.config.get(
@@ -142,7 +151,10 @@ class PaperTradingEngine:
             lookback=self.session.lookback,
             enabled=spike_on,
             initial_equity=self.portfolio.initial_equity,
+            stop_loss_pct=float(self.session.stop_loss_pct),
         )
+        if spike_on:
+            self._log_spike_session_start()
 
     @property
     def tick_history(self) -> List[TickEvaluationResult]:
@@ -482,9 +494,42 @@ class PaperTradingEngine:
             self.on_state_change(state)
         return result
 
+    def _log_spike_session_start(self) -> None:
+        from tradingagents.simulator.activity_messages import format_spike_session_line
+
+        monitor = self._spike_monitor
+        self._emit_activity(
+            format_spike_session_line(
+                enabled=monitor.enabled,
+                intelligent_tuning=monitor.intelligent_tuning,
+                windows=monitor.windows,
+                cooldown_minutes=monitor.cooldown_minutes,
+            )
+        )
+        self._last_logged_spike_tuning = monitor.tuning_note
+
+    def _maybe_log_spike_activity(self, timestamp: datetime) -> None:
+        if not self._spike_monitor.enabled:
+            return
+        warning = self._spike_monitor.check_proximity_warning(timestamp)
+        if warning:
+            self._emit_activity(warning)
+            return
+        if not self._spike_monitor.intelligent_tuning:
+            return
+        note = self._spike_monitor.tuning_note
+        if note and note != self._last_logged_spike_tuning:
+            from tradingagents.simulator.activity_messages import format_spike_tuning_update
+
+            self._last_logged_spike_tuning = note
+            self._emit_activity(
+                format_spike_tuning_update(note, self._spike_monitor.windows)
+            )
+
     def _record_equity_samples(self, equity: float, timestamp: datetime) -> None:
         self._adaptive.record_equity(equity, timestamp)
         self._spike_monitor.record_equity(equity, timestamp)
+        self._maybe_log_spike_activity(timestamp)
 
     def _schedule_adaptive_rebacktest(self, now: datetime) -> None:
         if self._bg_action_running:
@@ -861,6 +906,7 @@ class PaperTradingEngine:
         now = quote.timestamp
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
+        spike_status = self._spike_monitor.status(now)
         return PaperTradingState(
             symbol=self.session.symbol,
             strategy_name=self.session.strategy_name,
@@ -881,6 +927,13 @@ class PaperTradingEngine:
                 self._adaptive.minutes_since_last_drawdown_review(now)
             ),
             effective_drawdown_window_minutes=self._adaptive.effective_review_window_minutes(now),
+            spike_review_enabled=self._spike_monitor.enabled,
+            spike_intelligent_tuning=self._spike_monitor.intelligent_tuning,
+            spike_status_line=self._spike_monitor.format_status_line(now),
+            last_spike_review=format_last_spike_review(
+                spike_status.minutes_since_last_review
+            ),
+            spike_review_count=spike_status.review_count,
             open_position=pos_desc,
         )
 

@@ -97,6 +97,8 @@ class TestPaperInteractive:
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: True),
             MagicMock(ask=lambda: True),
+            MagicMock(ask=lambda: True),
+            MagicMock(ask=lambda: True),
         ]
 
         params = resolve_paper_params(
@@ -116,6 +118,8 @@ class TestPaperInteractive:
         assert params.take_profit_pct == 0.06
         assert params.live_mode is True
         assert params.adaptive_enabled is True
+        assert params.spike_review_enabled is True
+        assert params.spike_intelligent_tuning is True
         assert params.drawdown_window_minutes == 30.0
         assert params.max_drawdown_pct == 5.0
 
@@ -203,6 +207,8 @@ class TestPaperInteractive:
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: False),
             MagicMock(ask=lambda: True),
+            MagicMock(ask=lambda: True),
+            MagicMock(ask=lambda: True),
         ]
 
         params = resolve_paper_params(
@@ -242,6 +248,8 @@ class TestPaperInteractive:
         ]
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: False),
+            MagicMock(ask=lambda: True),
+            MagicMock(ask=lambda: True),
             MagicMock(ask=lambda: True),
         ]
 

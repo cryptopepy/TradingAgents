@@ -72,6 +72,14 @@ def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -
         "DD review window",
         f"{state.effective_drawdown_window_minutes:.0f}m",
     )
+    if state.spike_review_enabled:
+        spike_mode = "auto-tuned" if state.spike_intelligent_tuning else "fixed"
+        table.add_row("Fast-move review", f"on ({spike_mode})")
+        table.add_row("Fast-move watch", state.spike_status_line)
+        table.add_row("Last fast-move review", state.last_spike_review)
+        table.add_row("Fast-move reviews", str(state.spike_review_count))
+    else:
+        table.add_row("Fast-move review", "off")
     table.add_row("Position", state.open_position or "flat")
     table.add_row("Adaptive re-tests", str(state.rebacktest_count))
     return table
@@ -584,12 +592,18 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     config["paper_fresh_start"] = start_fresh
 
     adaptive, window, threshold = _prompt_adaptive_settings(config)
-    spike_review = _prompt_spike_settings(config, adaptive_enabled=adaptive)
+    spike_enabled, spike_tuning = _prompt_spike_settings(config, adaptive_enabled=adaptive)
     config["drawdown_time_window_minutes"] = window
     config["paper_loss_review_minutes"] = window
     config["max_allowed_drawdown_pct"] = threshold
     config["paper_loss_threshold_pct"] = threshold
     config["paper_adaptive_enabled"] = adaptive
-    config["paper_spike_review_enabled"] = spike_review and adaptive
+    config["paper_spike_review_enabled"] = spike_enabled and adaptive
+    config["paper_spike_intelligent_tuning_enabled"] = spike_tuning and spike_enabled and adaptive
     ticks = _prompt_ticks()
-    return {"adaptive": adaptive, "spike_review": spike_review, "ticks": ticks}
+    return {
+        "adaptive": adaptive,
+        "spike_review": spike_enabled,
+        "spike_intelligent_tuning": spike_tuning,
+        "ticks": ticks,
+    }

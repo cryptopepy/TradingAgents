@@ -38,6 +38,7 @@ class PaperRunParams:
     take_profit_pct: Optional[float]
     adaptive_enabled: bool
     spike_review_enabled: bool
+    spike_intelligent_tuning: bool
     drawdown_window_minutes: float
     max_drawdown_pct: float
     resume_saved_session: bool = False
@@ -324,16 +325,24 @@ def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     return True, window, threshold
 
 
-def _prompt_spike_settings(config: dict, *, adaptive_enabled: bool) -> bool:
+def _prompt_spike_settings(config: dict, *, adaptive_enabled: bool) -> tuple[bool, bool]:
     if not adaptive_enabled:
-        return False
+        return False, False
     enabled = questionary.confirm(
         "Enable fast-movement reviews (re-check when equity drops quickly)?",
         default=bool(config.get("paper_spike_review_enabled", True)),
     ).ask()
     if enabled is None:
         raise BacktestValidationError("Paper trading cancelled.")
-    return bool(enabled)
+    if not enabled:
+        return False, False
+    intelligent = questionary.confirm(
+        "Enable intelligent spike tuning (adapt thresholds to stop-loss & chop)?",
+        default=bool(config.get("paper_spike_intelligent_tuning_enabled", True)),
+    ).ask()
+    if intelligent is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    return True, bool(intelligent)
 
 
 def prompt_paper_params(
@@ -394,7 +403,7 @@ def prompt_paper_params(
         resolved_live = bool(live_answer)
 
     adaptive, window, threshold = _prompt_adaptive_settings(cfg)
-    spike_review = _prompt_spike_settings(cfg, adaptive_enabled=adaptive)
+    spike_review, spike_tuning = _prompt_spike_settings(cfg, adaptive_enabled=adaptive)
 
     return PaperRunParams(
         ticker=resolved_ticker,
@@ -407,6 +416,7 @@ def prompt_paper_params(
         take_profit_pct=take_profit_pct,
         adaptive_enabled=adaptive,
         spike_review_enabled=spike_review,
+        spike_intelligent_tuning=spike_tuning,
         drawdown_window_minutes=window,
         max_drawdown_pct=threshold,
         resume_saved_session=resume_saved,
@@ -421,8 +431,9 @@ def resolve_paper_params(
     equity: Optional[float],
     ticks: Optional[int],
     live_mode: bool,
-    adaptive_enabled: Optional[bool],
-    spike_review_enabled: Optional[bool],
+    adaptive_enabled: Optional[bool] = None,
+    spike_review_enabled: Optional[bool] = None,
+    spike_intelligent_tuning: Optional[bool] = None,
     interactive: bool,
     fresh_start: bool = False,
     config: dict | None = None,
@@ -467,6 +478,8 @@ def resolve_paper_params(
             params = replace(params, adaptive_enabled=adaptive_enabled)
         if spike_review_enabled is not None:
             params = replace(params, spike_review_enabled=spike_review_enabled)
+        if spike_intelligent_tuning is not None:
+            params = replace(params, spike_intelligent_tuning=spike_intelligent_tuning)
         return params
 
     resolved_ticker = validate_ticker(ticker or DEFAULT_TICKER)
@@ -489,6 +502,15 @@ def resolve_paper_params(
     )
     if not resolved_adaptive:
         resolved_spike = False
+        resolved_spike_tuning = False
+    else:
+        resolved_spike_tuning = (
+            spike_intelligent_tuning
+            if spike_intelligent_tuning is not None
+            else bool(cfg.get("paper_spike_intelligent_tuning_enabled", True))
+        )
+        if not resolved_spike:
+            resolved_spike_tuning = False
     return PaperRunParams(
         ticker=resolved_ticker,
         strategy_name=validate_strategy_name(strategy_name),
@@ -500,6 +522,7 @@ def resolve_paper_params(
         take_profit_pct=_default_take_profit_pct(cfg),
         adaptive_enabled=resolved_adaptive,
         spike_review_enabled=resolved_spike,
+        spike_intelligent_tuning=resolved_spike_tuning,
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
         resume_saved_session=resume_saved,
@@ -514,6 +537,9 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_adaptive_enabled"] = params.adaptive_enabled
     cfg["paper_spike_review_enabled"] = (
         params.spike_review_enabled and params.adaptive_enabled
+    )
+    cfg["paper_spike_intelligent_tuning_enabled"] = (
+        params.spike_intelligent_tuning and params.spike_review_enabled and params.adaptive_enabled
     )
     cfg["drawdown_time_window_minutes"] = params.drawdown_window_minutes
     cfg["paper_loss_review_minutes"] = params.drawdown_window_minutes

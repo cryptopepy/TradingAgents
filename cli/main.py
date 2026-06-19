@@ -1435,6 +1435,11 @@ def paper_cmd(
         "--spike-review/--no-spike-review",
         help="Re-check strategy early when equity drops quickly (requires adaptive).",
     ),
+    spike_intelligent_tuning: Optional[bool] = typer.Option(
+        None,
+        "--spike-intelligent-tuning/--no-spike-intelligent-tuning",
+        help="Auto-tune fast-move thresholds from stop-loss and recent chop.",
+    ),
     ticks: Optional[int] = typer.Option(
         None,
         "--ticks",
@@ -1475,6 +1480,7 @@ def paper_cmd(
             live_mode=live,
             adaptive_enabled=adaptive,
             spike_review_enabled=spike_review,
+            spike_intelligent_tuning=spike_intelligent_tuning,
             interactive=interactive,
             fresh_start=fresh,
         )

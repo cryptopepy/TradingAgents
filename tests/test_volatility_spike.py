@@ -6,6 +6,7 @@ import pytest
 
 from tradingagents.simulator.volatility_spike import (
     VolatilitySpikeMonitor,
+    apply_intelligent_tuning,
     build_spike_windows,
     spike_profile_for_lookback,
 )
@@ -69,12 +70,54 @@ class TestVolatilitySpikeMonitor:
             "paper_spike_10m_loss_pct": 4.0,
             "paper_spike_min_cooldown_minutes": 25.0,
         }
-        cooldown, windows = build_spike_windows("8h", config)
+        cooldown, windows, _ = build_spike_windows("8h", config)
         assert cooldown == 25.0
         by_window = dict(windows)
         assert by_window[1.0] == 2.0
         assert by_window[5.0] == 3.0
         assert by_window[10.0] == 4.0
+
+    def test_intelligent_tuning_raises_thresholds_with_noise(self):
+        base_cooldown, base_windows, _ = build_spike_windows("8h", {})
+        tuned_cooldown, tuned_windows, note = apply_intelligent_tuning(
+            list(base_windows),
+            base_cooldown,
+            stop_loss_pct=0.02,
+            noise_pct=0.8,
+        )
+        assert dict(tuned_windows)[1.0] > dict(base_windows)[1.0]
+        assert tuned_cooldown >= base_cooldown
+        assert "chop" in note
+
+    def test_proximity_warning_fires_once_near_threshold(self):
+        monitor = VolatilitySpikeMonitor(
+            enabled=True,
+            cooldown_minutes=15.0,
+            windows=[(5.0, 2.0)],
+            initial_equity=10_000.0,
+        )
+        start = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+        monitor.record_equity(10_000.0, start - timedelta(minutes=6))
+        monitor.record_equity(9_860.0, start)
+        warn = monitor.check_proximity_warning(start)
+        assert warn is not None
+        assert "Fast-move watch" in warn
+        assert monitor.check_proximity_warning(start) is None
+
+    def test_status_line_includes_nearest_window(self):
+        monitor = VolatilitySpikeMonitor(
+            enabled=True,
+            intelligent_tuning=True,
+            cooldown_minutes=15.0,
+            windows=[(5.0, 2.0)],
+            initial_equity=10_000.0,
+        )
+        start = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+        monitor.record_equity(10_000.0, start - timedelta(minutes=6))
+        monitor.record_equity(9_950.0, start)
+        line = monitor.format_status_line(start)
+        assert "auto-tuned" in line
+        assert "@" in line
 
     def test_disabled_monitor_never_triggers(self):
         monitor = VolatilitySpikeMonitor(
