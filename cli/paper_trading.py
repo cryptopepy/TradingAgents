@@ -156,7 +156,7 @@ def render_paper_live_display(
     display_ctx: Optional[PaperDisplayContext] = None,
     movers_board: Optional[MoversBoard] = None,
 ) -> Group:
-    """Live view: ticks on top, portfolio + market, activity log fills the rest."""
+    """Live view: activity on top, ticks in the middle, portfolio + market, footer."""
     ctx = display_ctx or PaperDisplayContext()
     parts: list = []
 
@@ -165,6 +165,15 @@ def render_paper_live_display(
 
     session_high = price_history.session_high if price_history else None
     session_low = price_history.session_low if price_history else None
+
+    movers_reserve = 8 if ctx.show_movers and movers_board is not None else 0
+    reserved = 12 + 22 + 1 + movers_reserve
+    activity_h = activity_panel_height(reserved_lines=reserved)
+    activity_lines = max(6, activity_h - 3)
+    if log is not None and log.enabled:
+        parts.append(
+            log.render_panel(visible_lines=activity_lines, height=activity_h)
+        )
 
     if price_history is not None:
         parts.append(
@@ -199,14 +208,6 @@ def render_paper_live_display(
 
     if ctx.show_movers and movers_board is not None:
         parts.append(movers_board.render_panel(active_pair=state.symbol))
-
-    reserved = 14 + 22 + (8 if ctx.show_movers and movers_board is not None else 0)
-    activity_h = activity_panel_height(reserved_lines=reserved)
-    activity_lines = max(6, activity_h - 3)
-    if log is not None and log.enabled:
-        parts.append(
-            log.render_panel(visible_lines=activity_lines, height=activity_h)
-        )
 
     parts.append(_render_footer_controls(ctx))
     return Group(*parts)
