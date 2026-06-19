@@ -169,10 +169,15 @@ _PROVIDER_BASE_URL = {
 }
 
 
-def _resolve_provider_base_url(provider: str, explicit: Optional[str] = None) -> Optional[str]:
-    """Default base URL for ``provider``, with env-var overrides where defined."""
-    if explicit:
-        return explicit
+def _resolve_provider_base_url(provider: str) -> Optional[str]:
+    """Default base URL for ``provider``, with env-var overrides where defined.
+
+    Currently only Ollama supports an env-var override (``OLLAMA_BASE_URL``),
+    matching the convention in the broader Ollama tooling ecosystem so users
+    can point at a remote ollama-serve without editing code. The check is
+    call-time, not import-time, so tests that monkeypatch the env after
+    import behave correctly.
+    """
     if provider == "ollama":
         env_url = os.environ.get("OLLAMA_BASE_URL")
         if env_url:
@@ -180,18 +185,6 @@ def _resolve_provider_base_url(provider: str, explicit: Optional[str] = None) ->
     if provider == "local":
         return os.environ.get("LOCAL_LLM_BASE_URL") or _PROVIDER_BASE_URL["local"]
     return _PROVIDER_BASE_URL.get(provider)
-
-
-def _should_use_responses_api(provider: str, base_url: Optional[str], config_flag: Optional[bool]) -> bool:
-    """Native OpenAI Responses API only when targeting api.openai.com directly."""
-    if provider != "openai":
-        return False
-    if config_flag is not None:
-        return bool(config_flag)
-    if not base_url:
-        return True
-    normalized = base_url.lower()
-    return "api.openai.com" in normalized
 
 
 class OpenAIClient(BaseLLMClient):
@@ -219,11 +212,10 @@ class OpenAIClient(BaseLLMClient):
         llm_kwargs = {"model": self.model}
 
         # Provider-specific base URL and auth. An explicit base_url on the
-        # client (e.g. config backend_url / local proxy) takes precedence.
-        resolved_base_url = self.base_url or _resolve_provider_base_url(self.provider)
-        if self.provider in _PROVIDER_BASE_URL or self.provider == "local":
-            if resolved_base_url:
-                llm_kwargs["base_url"] = resolved_base_url
+        # client (e.g. a corporate proxy) takes precedence over the
+        # provider default so users can route through their own gateway.
+        if self.provider in _PROVIDER_BASE_URL:
+            llm_kwargs["base_url"] = self.base_url or _resolve_provider_base_url(self.provider)
             api_key_env = get_api_key_env(self.provider)
             if api_key_env:
                 api_key = os.environ.get(api_key_env)
@@ -247,13 +239,10 @@ class OpenAIClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        use_responses = _should_use_responses_api(
-            self.provider,
-            llm_kwargs.get("base_url"),
-            self.kwargs.get("use_responses_api"),
-        )
+        # Native OpenAI: use Responses API for consistent behavior across
+        # all model families. Third-party providers use Chat Completions.
         if self.provider == "openai":
-            llm_kwargs["use_responses_api"] = use_responses
+            llm_kwargs["use_responses_api"] = True
 
         # Provider-specific quirks live in their own subclasses so the
         # base NormalizedChatOpenAI stays free of provider branches.

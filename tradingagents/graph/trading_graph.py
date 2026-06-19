@@ -162,14 +162,6 @@ class TradingAgentsGraph:
             if effort:
                 kwargs["effort"] = effort
 
-        max_retries = self.config.get("llm_max_retries")
-        if max_retries is not None:
-            kwargs["max_retries"] = int(max_retries)
-
-        use_responses = self.config.get("llm_use_responses_api")
-        if use_responses is not None:
-            kwargs["use_responses_api"] = bool(use_responses)
-
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
         # string ("0.2") works the same as a programmatic float.

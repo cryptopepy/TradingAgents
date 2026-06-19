@@ -14,18 +14,6 @@ DEFAULT_API_RETRY_DELAYS: tuple[float, ...] = (10.0, 30.0, 180.0)
 QUICK_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 
-def retry_delays_from_config(config: dict | None, *, quick: bool = False) -> tuple[float, ...]:
-    """Resolve retry schedule from config (paper uses long delays by default)."""
-    if config is None:
-        return QUICK_RETRY_DELAYS if quick else DEFAULT_API_RETRY_DELAYS
-    raw = config.get("api_retry_delays_seconds")
-    if raw is None:
-        return QUICK_RETRY_DELAYS if quick else DEFAULT_API_RETRY_DELAYS
-    if isinstance(raw, (list, tuple)):
-        return tuple(float(x) for x in raw)
-    return DEFAULT_API_RETRY_DELAYS
-
-
 def retry_with_backoff(
     fn: Callable[[], T],
     *,

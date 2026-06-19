@@ -19,7 +19,7 @@ from tradingagents.backtest.engine import _last_closed_bar_dt
 from tradingagents.backtest.matcher import SimulatedMatcher
 from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
-from tradingagents.resilience import retry_delays_from_config, retry_with_backoff_optional
+from tradingagents.resilience import DEFAULT_API_RETRY_DELAYS, retry_with_backoff_optional
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price, get_live_feed_router
 from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
@@ -143,7 +143,7 @@ class PaperTradingEngine:
 
     def _fetch_price(self) -> Optional[LivePrice]:
         """Return a live quote, or None when all vendors failed (no mock trading)."""
-        delays = retry_delays_from_config(self.config)
+        delays = DEFAULT_API_RETRY_DELAYS
 
         def _attempt() -> LivePrice:
             quote = fetch_live_spot_price(self.session.symbol, self.config)
@@ -249,7 +249,7 @@ class PaperTradingEngine:
             return self.session.signal
         self._last_signal_bar = bar_open
 
-        delays = retry_delays_from_config(self.config)
+        delays = DEFAULT_API_RETRY_DELAYS
 
         def _load_signal() -> str:
             return compute_strategy_signal(
@@ -678,7 +678,7 @@ class PaperTradingEngine:
         self._emit_activity(banner)
         self._signals_halted = True
         on_start, on_complete, on_skipped, on_provider = self._make_horizon_callbacks()
-        delays = retry_delays_from_config(self.config)
+        delays = DEFAULT_API_RETRY_DELAYS
 
         try:
             from tradingagents.dataflows.trading_fees import paper_transaction_cost_pct
