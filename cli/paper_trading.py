@@ -25,6 +25,7 @@ from cli.paper_display import (
     PaperDisplayContext,
     activity_panel_height,
     clip_cell,
+    make_kv_table,
     render_market_panel,
     terminal_column_widths,
     terminal_size,
@@ -65,35 +66,22 @@ def render_paper_state_table(
 ) -> Table:
     """Rich table for portfolio balance, strategy, and PnL."""
     title = f"Paper Trading — {state.symbol}" if titled else None
-    value_max = max(12, (width - 20)) if width else 24
-    table = Table(
-        title=title,
-        show_header=True,
+    table, value_w = make_kv_table(
+        width,
         header_style="bold cyan",
-        expand=False,
-        pad_edge=False,
-        width=width,
+        title=title,
     )
-    table.add_column("Field", style="dim", min_width=10, max_width=14, no_wrap=True)
-    table.add_column(
-        "Value",
-        justify="right",
-        min_width=12,
-        max_width=value_max,
-        overflow="ellipsis",
-        no_wrap=True,
-    )
-    table.add_row("Strategy", clip_cell(f"{state.strategy_name} ({state.lookback})", value_max))
-    table.add_row("Status", clip_cell(state.activity_status, value_max))
+    table.add_row("Strategy", clip_cell(f"{state.strategy_name} ({state.lookback})", value_w))
+    table.add_row("Status", clip_cell(state.activity_status, value_w))
     table.add_row("Signal", state.signal)
     table.add_row(
         "Price",
-        clip_cell(f"${state.price:,.4f} ({state.price_source})", value_max),
+        clip_cell(f"${state.price:,.4f} ({state.price_source})", value_w),
     )
     if state.price_endpoint:
-        table.add_row("Price endpoint", clip_cell(state.price_endpoint, value_max))
+        table.add_row("Price endpoint", clip_cell(state.price_endpoint, value_w))
     if state.vendor_failures:
-        table.add_row("Skipped vendors", clip_cell(state.vendor_failures, value_max))
+        table.add_row("Skipped vendors", clip_cell(state.vendor_failures, value_w))
     table.add_row("Equity", f"${state.equity:,.2f}")
     table.add_row("Cash", f"${state.cash:,.2f}")
     pnl_style = "green" if state.pnl >= 0 else "red"
@@ -123,7 +111,7 @@ def render_paper_state_table(
         table.add_row("Fast-move review", f"on ({spike_mode})")
         table.add_row(
             "Fast-move watch",
-            clip_cell(state.spike_watch_display, value_max),
+            clip_cell(state.spike_watch_display, value_w),
         )
         table.add_row("Last fast-move review", state.last_spike_review)
         table.add_row("Fast-move reviews", str(state.spike_review_count))
@@ -144,7 +132,7 @@ def render_paper_portfolio_panel(
         render_paper_state_table(state, titled=False, width=width),
         title=f"Paper Trading — {state.symbol}",
         border_style="cyan",
-        expand=False,
+        expand=True,
         width=width,
     )
 
@@ -201,7 +189,7 @@ def render_paper_live_display(
                 render_paper_portfolio_panel(state, width=w_left),
                 _market_panel(w_right),
             ],
-            expand=False,
+            expand=True,
             equal=True,
         )
     )
