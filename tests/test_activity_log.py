@@ -154,6 +154,18 @@ class TestActivityLog:
         assert "four" in rendered
         assert "one" not in rendered
 
+    def test_render_panel_shows_most_recent_lines(self):
+        log = ActivityLog(max_lines=50, enabled=True)
+        for i in range(25):
+            log.append(f"line-{i}")
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(log.render_panel(visible_lines=5))
+        rendered = buffer.getvalue()
+        assert "line-24" in rendered
+        assert "line-20" in rendered
+        assert "earlier events hidden" in rendered
+        assert "line-0" not in rendered
+
     def test_disabled_log_does_not_store(self):
         log = ActivityLog(enabled=False)
         log.append("hidden")

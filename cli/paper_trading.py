@@ -254,6 +254,8 @@ def run_paper_session(
         loop_clock["next_tick_at"] = time.monotonic() + interval
         display_ctx.seconds_until_next = interval
 
+    display_pending: dict = {"refresh": False, "state": None}
+
     def _refresh_display(state: Optional[PaperTradingState] = None) -> None:
         target = state or latest_state
         if target is not None and live is not None:
@@ -266,10 +268,23 @@ def run_paper_session(
                 )
             )
 
+    def _request_display_refresh(state: Optional[PaperTradingState] = None) -> None:
+        display_pending["refresh"] = True
+        if state is not None:
+            display_pending["state"] = state
+
+    def _flush_display_refresh() -> None:
+        if not display_pending["refresh"]:
+            return
+        state = display_pending["state"]
+        display_pending["refresh"] = False
+        display_pending["state"] = None
+        _refresh_display(state)
+
     log = ActivityLog(
         enabled=True,
         echo=_echo if not use_live_log else None,
-        on_change=lambda: _refresh_display(),
+        on_change=_request_display_refresh,
     )
 
     stop_requested = False
@@ -345,7 +360,7 @@ def run_paper_session(
             nonlocal latest_state
             latest_state = state
             _record_price(state)
-            _refresh_display(state)
+            _request_display_refresh(state)
 
         engine.on_state_change = _on_state
 
@@ -354,7 +369,7 @@ def run_paper_session(
             tick_count += 1
             loop_clock["next_tick_at"] = time.monotonic() + interval
             display_ctx.seconds_until_next = interval
-            _refresh_display()
+            _flush_display_refresh()
 
         confirm_state: dict = {"action": None}  # "close" | "reanalyze"
         action_state: dict = {"running": False, "label": ""}
@@ -382,7 +397,7 @@ def run_paper_session(
                     action_state["running"] = False
                     action_state["label"] = ""
                     display_ctx.busy_label = None
-                    _refresh_display()
+                    _request_display_refresh()
 
             threading.Thread(target=_worker, name=f"paper-{label}", daemon=True).start()
 
@@ -393,6 +408,7 @@ def run_paper_session(
             _refresh_display()
 
         def _poll_key(timeout: float) -> Optional[str]:
+            _flush_display_refresh()
             key = poll_stdin_key(timeout)
             if confirm_state["action"]:
                 if key == "y":
