@@ -131,6 +131,53 @@ def format_spike_tuning_update(note: str, windows: Sequence[Tuple[float, float]]
     return f"Fast-move thresholds updated ({note}) — {window_bits}"
 
 
+def format_session_heartbeat(state) -> str:
+    """Periodic status line for the activity log."""
+    pos = state.open_position or "flat"
+    spike = (
+        f" | fast-move {state.spike_status_line}"
+        if state.spike_review_enabled
+        else ""
+    )
+    return (
+        f"Status — {state.activity_status} | equity ${state.equity:,.2f} "
+        f"({state.pnl_pct:+.2f}%) | DD {state.drawdown_pct:.2f}%/"
+        f"{state.max_drawdown_pct:.1f}% | {pos}{spike}"
+    )
+
+
+def format_session_config_summary(
+    *,
+    stop_loss_pct: float,
+    take_profit_pct: float | None,
+    adaptive: bool,
+    drawdown_window_minutes: float,
+    max_drawdown_pct: float,
+    spike_enabled: bool,
+    spike_intelligent_tuning: bool,
+    tick_interval_seconds: float,
+) -> str:
+    tp = (
+        f"{take_profit_pct * 100:.1f}%"
+        if take_profit_pct is not None
+        else f"{stop_loss_pct * 200:.1f}% (2× SL)"
+    )
+    adaptive_part = (
+        f"adaptive on ({drawdown_window_minutes:.0f}m / {max_drawdown_pct:.1f}% cap)"
+        if adaptive
+        else "adaptive off"
+    )
+    if spike_enabled:
+        spike_mode = "intelligent" if spike_intelligent_tuning else "fixed thresholds"
+        spike_part = f"fast-move on ({spike_mode})"
+    else:
+        spike_part = "fast-move off"
+    return (
+        f"Risk — SL {stop_loss_pct * 100:.1f}% / TP {tp} | "
+        f"{adaptive_part} | {spike_part} | tick {tick_interval_seconds:.0f}s"
+    )
+
+
 def format_reanalyze_banner() -> str:
     return "══ Reanalyze (r) — re-running backtest ══"
 

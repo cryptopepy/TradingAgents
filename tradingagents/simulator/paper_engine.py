@@ -70,6 +70,11 @@ class PaperTradingState:
     spike_status_line: str = "off"
     last_spike_review: str = "Never"
     spike_review_count: int = 0
+    activity_status: str = "Watching"
+    adaptive_enabled: bool = False
+    max_drawdown_pct: float = 5.0
+    stop_loss_pct: float = 0.02
+    take_profit_pct: Optional[float] = None
     open_position: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -114,6 +119,7 @@ class PaperTradingEngine:
         self._last_logged_price_source: Optional[str] = None
         self._price_feed_logged = False
         self._last_logged_spike_tuning: str = ""
+        self._last_heartbeat_at: float = 0.0
 
         review_minutes = float(
             self.config.get(
@@ -271,6 +277,7 @@ class PaperTradingEngine:
         if not force and self._last_signal_bar == bar_open:
             return self.session.signal
         self._last_signal_bar = bar_open
+        prior_signal = self.session.signal
 
         delays = DEFAULT_API_RETRY_DELAYS
 
@@ -304,6 +311,10 @@ class PaperTradingEngine:
             return self.session.signal
 
         signal = StrategySignal.from_string(raw)
+        if signal != prior_signal:
+            self._emit_activity(
+                f"Signal updated on new bar: {prior_signal.value} → {signal.value}"
+            )
         self.session.signal = signal
         return signal
 
@@ -510,12 +521,21 @@ class PaperTradingEngine:
 
     def _maybe_log_spike_activity(self, timestamp: datetime) -> None:
         if not self._spike_monitor.enabled:
+            if self.adaptive_enabled:
+                warning = self._adaptive.check_drawdown_warning(timestamp)
+                if warning:
+                    self._emit_activity(warning)
+            self._maybe_log_heartbeat(timestamp)
             return
         warning = self._spike_monitor.check_proximity_warning(timestamp)
         if warning:
             self._emit_activity(warning)
-            return
+        elif self.adaptive_enabled:
+            dd_warning = self._adaptive.check_drawdown_warning(timestamp)
+            if dd_warning:
+                self._emit_activity(dd_warning)
         if not self._spike_monitor.intelligent_tuning:
+            self._maybe_log_heartbeat(timestamp)
             return
         note = self._spike_monitor.tuning_note
         if note and note != self._last_logged_spike_tuning:
@@ -525,6 +545,35 @@ class PaperTradingEngine:
             self._emit_activity(
                 format_spike_tuning_update(note, self._spike_monitor.windows)
             )
+        self._maybe_log_heartbeat(timestamp)
+
+    def _maybe_log_heartbeat(self, timestamp: datetime) -> None:
+        interval = float(self.config.get("paper_status_heartbeat_minutes", 10.0))
+        if interval <= 0:
+            return
+        now_mono = time.monotonic()
+        if self._last_heartbeat_at and (now_mono - self._last_heartbeat_at) < interval * 60.0:
+            return
+        self._last_heartbeat_at = now_mono
+        from tradingagents.simulator.activity_messages import format_session_heartbeat
+
+        state = self.get_state()
+        self._emit_activity(format_session_heartbeat(state))
+
+    def _activity_status(self) -> str:
+        if self._signals_halted:
+            return "Re-analyzing — signals paused"
+        if self._bg_action_running:
+            return "Background action running"
+        if self._feed_unavailable:
+            return "Waiting for price feed"
+        if self.session.symbol in self.portfolio.positions:
+            pos = self.portfolio.positions[self.session.symbol]
+            side = "long" if pos["side"] > 0 else "short"
+            return f"Holding {side}"
+        if self.session.signal != StrategySignal.FLAT:
+            return f"Signal {self.session.signal.value} — flat"
+        return "Watching"
 
     def _record_equity_samples(self, equity: float, timestamp: datetime) -> None:
         self._adaptive.record_equity(equity, timestamp)
@@ -907,6 +956,9 @@ class PaperTradingEngine:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         spike_status = self._spike_monitor.status(now)
+        take_profit = self.session.take_profit_pct
+        if take_profit is None:
+            take_profit = self.session.stop_loss_pct * 2.0
         return PaperTradingState(
             symbol=self.session.symbol,
             strategy_name=self.session.strategy_name,
@@ -934,6 +986,16 @@ class PaperTradingEngine:
                 spike_status.minutes_since_last_review
             ),
             spike_review_count=spike_status.review_count,
+            activity_status=self._activity_status(),
+            adaptive_enabled=self.adaptive_enabled,
+            max_drawdown_pct=float(
+                self.config.get(
+                    "max_allowed_drawdown_pct",
+                    self.config.get("paper_loss_threshold_pct", 5.0),
+                )
+            ),
+            stop_loss_pct=float(self.session.stop_loss_pct),
+            take_profit_pct=take_profit,
             open_position=pos_desc,
         )
 

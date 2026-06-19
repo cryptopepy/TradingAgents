@@ -27,6 +27,7 @@ from tradingagents.simulator.activity_messages import (
     format_close_retest_confirm_prompt,
     format_optimization_winner,
     format_reanalyze_confirm_prompt,
+    format_session_config_summary,
     format_session_start,
 )
 
@@ -56,6 +57,7 @@ def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -
     table.add_column("Field", style="dim", min_width=12)
     table.add_column("Value", justify="right", min_width=14)
     table.add_row("Strategy", f"{state.strategy_name} ({state.lookback})")
+    table.add_row("Status", state.activity_status)
     table.add_row("Signal", state.signal)
     table.add_row("Price", f"${state.price:,.4f} ({state.price_source})")
     if state.price_endpoint:
@@ -66,12 +68,22 @@ def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -
     table.add_row("Cash", f"${state.cash:,.2f}")
     pnl_style = "green" if state.pnl >= 0 else "red"
     table.add_row("PnL", f"[{pnl_style}]${state.pnl:,.2f} ({state.pnl_pct:+.2f}%)[/{pnl_style}]")
-    table.add_row("Drawdown", f"{state.drawdown_pct:.2f}%")
-    table.add_row("Last DD review", state.last_drawdown_review)
     table.add_row(
-        "DD review window",
-        f"{state.effective_drawdown_window_minutes:.0f}m",
+        "Stop / TP",
+        f"{state.stop_loss_pct * 100:.1f}% / {state.take_profit_pct * 100:.1f}%",
     )
+    table.add_row(
+        "Drawdown",
+        f"{state.drawdown_pct:.2f}% / {state.max_drawdown_pct:.1f}% cap",
+    )
+    if state.adaptive_enabled:
+        table.add_row("Last DD review", state.last_drawdown_review)
+        table.add_row(
+            "DD review window",
+            f"{state.effective_drawdown_window_minutes:.0f}m",
+        )
+    else:
+        table.add_row("Adaptive review", "off")
     if state.spike_review_enabled:
         spike_mode = "auto-tuned" if state.spike_intelligent_tuning else "fixed"
         table.add_row("Fast-move review", f"on ({spike_mode})")
@@ -351,6 +363,24 @@ def run_paper_session(
                 interval=interval,
             )
         )
+        log.append(
+            format_session_config_summary(
+                stop_loss_pct=float(session.stop_loss_pct),
+                take_profit_pct=session.take_profit_pct,
+                adaptive=adaptive_on,
+                drawdown_window_minutes=float(
+                    cfg.get("drawdown_time_window_minutes", 60)
+                ),
+                max_drawdown_pct=float(
+                    cfg.get("max_allowed_drawdown_pct", 5.0)
+                ),
+                spike_enabled=bool(cfg.get("paper_spike_review_enabled", False)),
+                spike_intelligent_tuning=bool(
+                    cfg.get("paper_spike_intelligent_tuning_enabled", False)
+                ),
+                tick_interval_seconds=interval,
+            )
+        )
 
         if not use_live_log:
             console.print(
@@ -577,8 +607,9 @@ def run_paper_session(
 def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     """Interactive paper-trading options (post-analysis deploy flow)."""
     from cli.paper_interactive import (
-        _prompt_adaptive_settings,
-        _prompt_spike_settings,
+        _prompt_paper_monitoring_settings,
+        _prompt_risk_exit_settings,
+        _prompt_tick_interval,
         _prompt_ticks,
         _resolve_equity_and_session,
     )
@@ -591,19 +622,34 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     config["paper_initial_equity"] = equity
     config["paper_fresh_start"] = start_fresh
 
-    adaptive, window, threshold = _prompt_adaptive_settings(config)
-    spike_enabled, spike_tuning = _prompt_spike_settings(config, adaptive_enabled=adaptive)
+    tick_interval = _prompt_tick_interval(config)
+    stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(config)
+    adaptive, window, threshold, spike = _prompt_paper_monitoring_settings(
+        config,
+        stop_loss_pct=stop_loss_pct,
+    )
+    config["paper_tick_interval_seconds"] = tick_interval
+    config["paper_stop_loss_pct"] = stop_loss_pct
+    config["paper_take_profit_pct"] = take_profit_pct
     config["drawdown_time_window_minutes"] = window
     config["paper_loss_review_minutes"] = window
     config["max_allowed_drawdown_pct"] = threshold
     config["paper_loss_threshold_pct"] = threshold
     config["paper_adaptive_enabled"] = adaptive
-    config["paper_spike_review_enabled"] = spike_enabled and adaptive
-    config["paper_spike_intelligent_tuning_enabled"] = spike_tuning and spike_enabled and adaptive
+    config["paper_spike_review_enabled"] = spike.enabled and adaptive
+    config["paper_spike_intelligent_tuning_enabled"] = (
+        spike.intelligent_tuning and spike.enabled and adaptive
+    )
+    config["paper_spike_1m_loss_pct"] = spike.loss_1m_pct
+    config["paper_spike_5m_loss_pct"] = spike.loss_5m_pct
+    config["paper_spike_10m_loss_pct"] = spike.loss_10m_pct
+    config["paper_spike_switch_min_net_profit"] = spike.switch_min_net_profit
+    config["paper_spike_min_cooldown_minutes"] = spike.min_cooldown_minutes
     ticks = _prompt_ticks()
     return {
         "adaptive": adaptive,
-        "spike_review": spike_enabled,
-        "spike_intelligent_tuning": spike_tuning,
+        "spike_review": spike.enabled,
+        "spike_intelligent_tuning": spike.intelligent_tuning,
+        "tick_interval_seconds": tick_interval,
         "ticks": ticks,
     }

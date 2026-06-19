@@ -88,6 +88,18 @@ class TestAdaptiveStrategyMonitor:
         assert monitor.rebacktest_count == 1
         assert monitor.last_drawdown_review_at == now + timedelta(minutes=15)
 
+    def test_drawdown_warning_near_cap(self):
+        monitor = AdaptiveStrategyMonitor(
+            loss_threshold_pct=5.0,
+            initial_equity=10_000.0,
+        )
+        now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+        monitor.record_equity(9_650.0, now)
+        warning = monitor.check_drawdown_warning(now)
+        assert warning is not None
+        assert "Drawdown watch" in warning
+        assert monitor.check_drawdown_warning(now) is None
+
 
 @pytest.mark.unit
 class TestAutonomousRotationLog:

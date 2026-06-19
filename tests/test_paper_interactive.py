@@ -46,7 +46,7 @@ class TestPaperInteractive:
         assert params.take_profit_pct is None
         assert params.adaptive_enabled is True
 
-    def test_resolve_paper_params_non_interactive_explicit_flags(self):
+    def test_resolve_paper_params_non_interactive_explicit_flags(self, tmp_path):
         params = resolve_paper_params(
             ticker="eth/usdc",
             strategy_name="rsi_mean_reversion",
@@ -55,6 +55,7 @@ class TestPaperInteractive:
             live_mode=True,
             adaptive_enabled=False,
             interactive=False,
+            config={"data_cache_dir": str(tmp_path)},
         )
         assert params.ticker == "ETH/USDC"
         assert params.strategy_name == "rsi_mean_reversion"
@@ -89,10 +90,13 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "ETH/USDC"),
             MagicMock(ask=lambda: "10000"),
             MagicMock(ask=lambda: "10"),
+            MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "0.03"),
             MagicMock(ask=lambda: "0.06"),
             MagicMock(ask=lambda: "30"),
             MagicMock(ask=lambda: "5.0"),
+            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: True),
@@ -120,6 +124,8 @@ class TestPaperInteractive:
         assert params.adaptive_enabled is True
         assert params.spike_review_enabled is True
         assert params.spike_intelligent_tuning is True
+        assert params.tick_interval_seconds == 10.0
+        assert params.spike_switch_min_net_profit == 0.005
         assert params.drawdown_window_minutes == 30.0
         assert params.max_drawdown_pct == 5.0
 
@@ -199,10 +205,13 @@ class TestPaperInteractive:
         mock_text.side_effect = [
             MagicMock(ask=lambda: "BTC/USDT"),
             MagicMock(ask=lambda: "10"),
+            MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "0.02"),
             MagicMock(ask=lambda: ""),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
+            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: False),
@@ -241,10 +250,13 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "BTC/USDT"),
             MagicMock(ask=lambda: "12000"),
             MagicMock(ask=lambda: "5"),
+            MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "0.02"),
             MagicMock(ask=lambda: ""),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
+            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [
             MagicMock(ask=lambda: False),

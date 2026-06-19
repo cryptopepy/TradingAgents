@@ -27,18 +27,37 @@ STRATEGY_AUTO = "__auto_backtest__"
 
 
 @dataclass(frozen=True)
+class SpikeSettings:
+    """Fast-move review options collected during setup."""
+
+    enabled: bool = False
+    intelligent_tuning: bool = False
+    loss_1m_pct: float = 1.5
+    loss_5m_pct: float = 2.0
+    loss_10m_pct: float = 2.5
+    switch_min_net_profit: float = 0.005
+    min_cooldown_minutes: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class PaperRunParams:
     ticker: str
     strategy_name: Optional[str]
     lookback: str
     initial_equity: float
     ticks: Optional[int]
+    tick_interval_seconds: float
     live_mode: bool
     stop_loss_pct: float
     take_profit_pct: Optional[float]
     adaptive_enabled: bool
     spike_review_enabled: bool
     spike_intelligent_tuning: bool
+    spike_1m_loss_pct: float
+    spike_5m_loss_pct: float
+    spike_10m_loss_pct: float
+    spike_switch_min_net_profit: float
+    spike_min_cooldown_minutes: Optional[float]
     drawdown_window_minutes: float
     max_drawdown_pct: float
     resume_saved_session: bool = False
@@ -76,6 +95,35 @@ def _default_take_profit_pct(config: dict) -> Optional[float]:
     if raw is None:
         return None
     return float(raw)
+
+
+def _default_tick_interval(config: dict) -> float:
+    return float(config.get("paper_tick_interval_seconds", 10.0))
+
+
+def _default_spike_settings(config: dict) -> SpikeSettings:
+    cooldown = config.get("paper_spike_min_cooldown_minutes")
+    return SpikeSettings(
+        enabled=bool(config.get("paper_spike_review_enabled", True)),
+        intelligent_tuning=bool(config.get("paper_spike_intelligent_tuning_enabled", True)),
+        loss_1m_pct=float(config.get("paper_spike_1m_loss_pct", 1.5)),
+        loss_5m_pct=float(config.get("paper_spike_5m_loss_pct", 2.0)),
+        loss_10m_pct=float(config.get("paper_spike_10m_loss_pct", 2.5)),
+        switch_min_net_profit=float(config.get("paper_spike_switch_min_net_profit", 0.005)),
+        min_cooldown_minutes=float(cooldown) if cooldown is not None else None,
+    )
+
+
+def _parse_optional_positive_float(raw: str, *, name: str) -> Optional[float]:
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise BacktestValidationError(f"{name} must be a number, got {raw!r}") from exc
+    validate_positive_float(value, name=name, minimum=0.1)
+    return value
 
 
 def validate_strategy_name(name: Optional[str]) -> Optional[str]:
@@ -242,6 +290,24 @@ def _prompt_ticks() -> Optional[int]:
     return validate_ticks(int(text))
 
 
+def _prompt_tick_interval(config: dict) -> float:
+    default = _default_tick_interval(config)
+    default_str = str(int(default) if default == int(default) else default)
+    raw = questionary.text(
+        "Price check interval (seconds between ticks):",
+        default=default_str,
+    ).ask()
+    if raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BacktestValidationError(
+            f"Tick interval must be a number, got {raw!r}"
+        ) from exc
+    return validate_positive_float(value, name="Tick interval", minimum=1.0)
+
+
 def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
     stop_default = _default_stop_loss_pct(config)
     take_default = _default_take_profit_pct(config)
@@ -325,24 +391,119 @@ def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     return True, window, threshold
 
 
-def _prompt_spike_settings(config: dict, *, adaptive_enabled: bool) -> tuple[bool, bool]:
+def _prompt_spike_settings(
+    config: dict,
+    *,
+    adaptive_enabled: bool,
+    stop_loss_pct: float,
+) -> SpikeSettings:
+    defaults = _default_spike_settings(config)
     if not adaptive_enabled:
-        return False, False
+        return SpikeSettings(enabled=False)
+
     enabled = questionary.confirm(
         "Enable fast-movement reviews (re-check when equity drops quickly)?",
-        default=bool(config.get("paper_spike_review_enabled", True)),
+        default=defaults.enabled,
     ).ask()
     if enabled is None:
         raise BacktestValidationError("Paper trading cancelled.")
     if not enabled:
-        return False, False
+        return SpikeSettings(enabled=False)
+
     intelligent = questionary.confirm(
         "Enable intelligent spike tuning (adapt thresholds to stop-loss & chop)?",
-        default=bool(config.get("paper_spike_intelligent_tuning_enabled", True)),
+        default=defaults.intelligent_tuning,
     ).ask()
     if intelligent is None:
         raise BacktestValidationError("Paper trading cancelled.")
-    return True, bool(intelligent)
+
+    loss_1m = defaults.loss_1m_pct
+    loss_5m = defaults.loss_5m_pct
+    loss_10m = defaults.loss_10m_pct
+    if not intelligent:
+        console.print(
+            "[dim]Fast-move loss triggers (% of equity drop over the window).[/dim]"
+        )
+        for label, attr, current in (
+            ("1-minute loss trigger %", "loss_1m", loss_1m),
+            ("5-minute loss trigger %", "loss_5m", loss_5m),
+            ("10-minute loss trigger %", "loss_10m", loss_10m),
+        ):
+            raw = questionary.text(f"{label}:", default=str(current)).ask()
+            if raw is None:
+                raise BacktestValidationError("Paper trading cancelled.")
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise BacktestValidationError(
+                    f"{label} must be a number, got {raw!r}"
+                ) from exc
+            validate_positive_float(value, name=label, minimum=0.1)
+            if attr == "loss_1m":
+                loss_1m = value
+            elif attr == "loss_5m":
+                loss_5m = value
+            else:
+                loss_10m = value
+    else:
+        console.print(
+            "[dim]Intelligent tuning scales fast-move thresholds from your "
+            f"{stop_loss_pct * 100:.1f}% stop-loss and recent chop.[/dim]"
+        )
+
+    switch_raw = questionary.text(
+        "Min backtest edge to switch on fast-move review (e.g. 0.005 = 0.5%):",
+        default=str(defaults.switch_min_net_profit),
+    ).ask()
+    if switch_raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    try:
+        switch_min = float(switch_raw)
+    except ValueError as exc:
+        raise BacktestValidationError(
+            f"Switch edge must be a number, got {switch_raw!r}"
+        ) from exc
+    validate_positive_float(switch_min, name="Switch edge", minimum=0.0001)
+
+    cooldown_default = (
+        ""
+        if defaults.min_cooldown_minutes is None
+        else str(defaults.min_cooldown_minutes)
+    )
+    cooldown_raw = questionary.text(
+        "Fast-move review cooldown minutes (empty = lookback default):",
+        default=cooldown_default,
+    ).ask()
+    if cooldown_raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    cooldown = _parse_optional_positive_float(
+        cooldown_raw, name="Fast-move cooldown"
+    )
+
+    return SpikeSettings(
+        enabled=True,
+        intelligent_tuning=bool(intelligent),
+        loss_1m_pct=loss_1m,
+        loss_5m_pct=loss_5m,
+        loss_10m_pct=loss_10m,
+        switch_min_net_profit=switch_min,
+        min_cooldown_minutes=cooldown,
+    )
+
+
+def _prompt_paper_monitoring_settings(
+    config: dict,
+    *,
+    stop_loss_pct: float,
+) -> tuple[bool, float, float, SpikeSettings]:
+    """Adaptive drawdown + fast-move review prompts."""
+    adaptive, window, threshold = _prompt_adaptive_settings(config)
+    spike = _prompt_spike_settings(
+        config,
+        adaptive_enabled=adaptive,
+        stop_loss_pct=stop_loss_pct,
+    )
+    return adaptive, window, threshold, spike
 
 
 def prompt_paper_params(
@@ -389,6 +550,7 @@ def prompt_paper_params(
         )
 
     resolved_ticks = validate_ticks(ticks) if ticks is not None else _prompt_ticks()
+    tick_interval = _prompt_tick_interval(cfg)
     stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(cfg)
 
     if live_mode:
@@ -402,8 +564,10 @@ def prompt_paper_params(
             raise BacktestValidationError("Paper trading cancelled.")
         resolved_live = bool(live_answer)
 
-    adaptive, window, threshold = _prompt_adaptive_settings(cfg)
-    spike_review, spike_tuning = _prompt_spike_settings(cfg, adaptive_enabled=adaptive)
+    adaptive, window, threshold, spike = _prompt_paper_monitoring_settings(
+        cfg,
+        stop_loss_pct=stop_loss_pct,
+    )
 
     return PaperRunParams(
         ticker=resolved_ticker,
@@ -411,12 +575,18 @@ def prompt_paper_params(
         lookback="24h",
         initial_equity=resolved_equity,
         ticks=resolved_ticks,
+        tick_interval_seconds=tick_interval,
         live_mode=resolved_live,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         adaptive_enabled=adaptive,
-        spike_review_enabled=spike_review,
-        spike_intelligent_tuning=spike_tuning,
+        spike_review_enabled=spike.enabled,
+        spike_intelligent_tuning=spike.intelligent_tuning,
+        spike_1m_loss_pct=spike.loss_1m_pct,
+        spike_5m_loss_pct=spike.loss_5m_pct,
+        spike_10m_loss_pct=spike.loss_10m_pct,
+        spike_switch_min_net_profit=spike.switch_min_net_profit,
+        spike_min_cooldown_minutes=spike.min_cooldown_minutes,
         drawdown_window_minutes=window,
         max_drawdown_pct=threshold,
         resume_saved_session=resume_saved,
@@ -511,18 +681,25 @@ def resolve_paper_params(
         )
         if not resolved_spike:
             resolved_spike_tuning = False
+    spike_defaults = _default_spike_settings(cfg)
     return PaperRunParams(
         ticker=resolved_ticker,
         strategy_name=validate_strategy_name(strategy_name),
         lookback="24h",
         initial_equity=resolved_equity,
         ticks=validate_ticks(ticks),
+        tick_interval_seconds=_default_tick_interval(cfg),
         live_mode=live_mode,
         stop_loss_pct=_default_stop_loss_pct(cfg),
         take_profit_pct=_default_take_profit_pct(cfg),
         adaptive_enabled=resolved_adaptive,
         spike_review_enabled=resolved_spike,
         spike_intelligent_tuning=resolved_spike_tuning,
+        spike_1m_loss_pct=spike_defaults.loss_1m_pct,
+        spike_5m_loss_pct=spike_defaults.loss_5m_pct,
+        spike_10m_loss_pct=spike_defaults.loss_10m_pct,
+        spike_switch_min_net_profit=spike_defaults.switch_min_net_profit,
+        spike_min_cooldown_minutes=spike_defaults.min_cooldown_minutes,
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
         resume_saved_session=resume_saved,
@@ -541,6 +718,12 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_spike_intelligent_tuning_enabled"] = (
         params.spike_intelligent_tuning and params.spike_review_enabled and params.adaptive_enabled
     )
+    cfg["paper_spike_1m_loss_pct"] = params.spike_1m_loss_pct
+    cfg["paper_spike_5m_loss_pct"] = params.spike_5m_loss_pct
+    cfg["paper_spike_10m_loss_pct"] = params.spike_10m_loss_pct
+    cfg["paper_spike_switch_min_net_profit"] = params.spike_switch_min_net_profit
+    cfg["paper_spike_min_cooldown_minutes"] = params.spike_min_cooldown_minutes
+    cfg["paper_tick_interval_seconds"] = params.tick_interval_seconds
     cfg["drawdown_time_window_minutes"] = params.drawdown_window_minutes
     cfg["paper_loss_review_minutes"] = params.drawdown_window_minutes
     cfg["max_allowed_drawdown_pct"] = params.max_drawdown_pct

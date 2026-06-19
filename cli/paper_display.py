@@ -45,6 +45,9 @@ def render_market_panel(
     table.add_row("Tick every", f"{ctx.tick_interval:.0f}s")
     if ctx.seconds_until_next is not None:
         table.add_row("Next tick", f"{max(0.0, ctx.seconds_until_next):.1f}s")
+    table.add_row("Session status", state.activity_status)
+    if state.spike_review_enabled:
+        table.add_row("Fast-move watch", state.spike_status_line)
     table.add_row("Signal", state.signal)
     if state.open_position:
         table.add_row("Position", state.open_position)

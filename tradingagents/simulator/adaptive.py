@@ -33,6 +33,7 @@ class AdaptiveStrategyMonitor:
     _samples: Deque[Tuple[datetime, float]] = field(default_factory=deque, init=False)
     _rebacktest_count: int = field(default=0, init=False)
     _last_drawdown_review_at: Optional[datetime] = field(default=None, init=False)
+    _warned_drawdown: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self._peak_equity = self.initial_equity
@@ -87,6 +88,25 @@ class AdaptiveStrategyMonitor:
                 self._losing_since = ts
         else:
             self._losing_since = None
+            self._warned_drawdown = False
+
+    def check_drawdown_warning(self, now: Optional[datetime] = None) -> Optional[str]:
+        """One-shot warning when drawdown nears the sustained-review cap."""
+        dd = self.current_drawdown_pct()
+        if dd <= 0 or self.loss_threshold_pct <= 0:
+            self._warned_drawdown = False
+            return None
+        ratio = dd / self.loss_threshold_pct
+        if ratio < 0.5:
+            self._warned_drawdown = False
+            return None
+        if ratio < 0.7 or self._warned_drawdown:
+            return None
+        self._warned_drawdown = True
+        return (
+            f"Drawdown watch — {dd:.2f}% "
+            f"({ratio * 100:.0f}% of {self.loss_threshold_pct:.1f}% review cap)"
+        )
 
     def should_rebacktest(self, now: Optional[datetime] = None) -> bool:
         """True when drawdown exceeds threshold for the effective review window."""
@@ -101,6 +121,7 @@ class AdaptiveStrategyMonitor:
         """Reset losing timer after a successful re-backtest cycle."""
         self._rebacktest_count += 1
         self._losing_since = None
+        self._warned_drawdown = False
         self.note_drawdown_review(timestamp)
         if self._samples:
             self._peak_equity = self._samples[-1][1]

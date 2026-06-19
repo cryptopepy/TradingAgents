@@ -147,6 +147,7 @@ _BASE_CONFIG = {
     "paper_spike_min_cooldown_minutes": None,
     "paper_spike_switch_min_net_profit": 0.005,
     "paper_spike_intelligent_tuning_enabled": True,
+    "paper_status_heartbeat_minutes": 10.0,
     "paper_state_persistence": True,
     "paper_stop_loss_pct": 0.02,
     "paper_take_profit_pct": None,
