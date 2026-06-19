@@ -91,11 +91,11 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "10000"),
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "10"),
-            MagicMock(ask=lambda: "0.03"),
-            MagicMock(ask=lambda: "0.06"),
+            MagicMock(ask=lambda: "3.0"),
+            MagicMock(ask=lambda: "6.0"),
             MagicMock(ask=lambda: "30"),
             MagicMock(ask=lambda: "5.0"),
-            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: "0.5"),
             MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [
@@ -206,11 +206,11 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "BTC/USDT"),
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "10"),
-            MagicMock(ask=lambda: "0.02"),
+            MagicMock(ask=lambda: "2.0"),
             MagicMock(ask=lambda: ""),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
-            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: "0.5"),
             MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [
@@ -251,11 +251,11 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "12000"),
             MagicMock(ask=lambda: "5"),
             MagicMock(ask=lambda: "10"),
-            MagicMock(ask=lambda: "0.02"),
+            MagicMock(ask=lambda: "2.0"),
             MagicMock(ask=lambda: ""),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
-            MagicMock(ask=lambda: "0.005"),
+            MagicMock(ask=lambda: "0.5"),
             MagicMock(ask=lambda: ""),
         ]
         mock_confirm.side_effect = [

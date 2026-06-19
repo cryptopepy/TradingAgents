@@ -126,6 +126,22 @@ def _parse_optional_positive_float(raw: str, *, name: str) -> Optional[float]:
     return value
 
 
+def _stored_fraction_to_prompt_pct(value: float) -> float:
+    """Config/engine fractions (0.02) → setup prompt percent (2.0)."""
+    return value * 100.0
+
+
+def _prompt_pct_to_fraction(value: float) -> float:
+    """Setup answer as percent (2.0) → stored fraction (0.02). Accepts 0.02 too."""
+    if value < 0.1:
+        return value
+    return value / 100.0
+
+
+def _format_prompt_pct(value: float) -> str:
+    return f"{value:g}"
+
+
 def validate_strategy_name(name: Optional[str]) -> Optional[str]:
     """Validate strategy registry name; ``None`` means auto backtest selection."""
     if name is None or name == STRATEGY_AUTO:
@@ -309,21 +325,24 @@ def _prompt_tick_interval(config: dict) -> float:
 
 
 def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
-    stop_default = _default_stop_loss_pct(config)
+    stop_default_pct = _stored_fraction_to_prompt_pct(_default_stop_loss_pct(config))
     take_default = _default_take_profit_pct(config)
-    take_default_str = "" if take_default is None else str(take_default)
+    take_default_pct = (
+        None if take_default is None else _stored_fraction_to_prompt_pct(take_default)
+    )
+    take_default_str = "" if take_default_pct is None else _format_prompt_pct(take_default_pct)
 
     stop_raw = questionary.text(
-        f"Stop-loss % (default {stop_default}, e.g. 0.02 = 2%):",
-        default=str(stop_default),
+        f"Stop-loss % (e.g. 2.0):",
+        default=_format_prompt_pct(stop_default_pct),
     ).ask()
     if stop_raw is None:
         raise BacktestValidationError("Paper trading cancelled.")
 
     take_label = (
         f"Take-profit % (default {take_default_str or '2× stop-loss'}; empty = 2× stop-loss):"
-        if take_default is not None
-        else "Take-profit % (empty = 2× stop-loss):"
+        if take_default_pct is not None
+        else "Take-profit % (empty = 2× stop-loss, e.g. 4.0):"
     )
     take_raw = questionary.text(
         take_label,
@@ -333,7 +352,7 @@ def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
         raise BacktestValidationError("Paper trading cancelled.")
 
     try:
-        stop_loss_pct = float(stop_raw)
+        stop_loss_pct = _prompt_pct_to_fraction(float(stop_raw))
     except ValueError as exc:
         raise BacktestValidationError(
             f"Stop-loss must be a number, got {stop_raw!r}"
@@ -343,7 +362,7 @@ def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
     take_profit_pct: Optional[float] = None
     if take_raw.strip():
         try:
-            take_profit_pct = float(take_raw)
+            take_profit_pct = _prompt_pct_to_fraction(float(take_raw))
         except ValueError as exc:
             raise BacktestValidationError(
                 f"Take-profit must be a number, got {take_raw!r}"
@@ -425,9 +444,9 @@ def _prompt_spike_settings(
             "[dim]Fast-move loss triggers (% of equity drop over the window).[/dim]"
         )
         for label, attr, current in (
-            ("1-minute loss trigger %", "loss_1m", loss_1m),
-            ("5-minute loss trigger %", "loss_5m", loss_5m),
-            ("10-minute loss trigger %", "loss_10m", loss_10m),
+            ("1-minute loss trigger % (e.g. 1.5)", "loss_1m", loss_1m),
+            ("5-minute loss trigger % (e.g. 2.0)", "loss_5m", loss_5m),
+            ("10-minute loss trigger % (e.g. 2.5)", "loss_10m", loss_10m),
         ):
             raw = questionary.text(f"{label}:", default=str(current)).ask()
             if raw is None:
@@ -451,14 +470,15 @@ def _prompt_spike_settings(
             f"{stop_loss_pct * 100:.1f}% stop-loss and recent chop.[/dim]"
         )
 
+    switch_default_pct = _stored_fraction_to_prompt_pct(defaults.switch_min_net_profit)
     switch_raw = questionary.text(
-        "Min backtest edge to switch on fast-move review (e.g. 0.005 = 0.5%):",
-        default=str(defaults.switch_min_net_profit),
+        "Min backtest edge to switch on fast-move review % (e.g. 0.5):",
+        default=_format_prompt_pct(switch_default_pct),
     ).ask()
     if switch_raw is None:
         raise BacktestValidationError("Paper trading cancelled.")
     try:
-        switch_min = float(switch_raw)
+        switch_min = _prompt_pct_to_fraction(float(switch_raw))
     except ValueError as exc:
         raise BacktestValidationError(
             f"Switch edge must be a number, got {switch_raw!r}"
