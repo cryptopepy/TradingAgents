@@ -341,6 +341,24 @@ class VolatilitySpikeMonitor:
             parts.append(status.tuning_note)
         return " · ".join(parts) if parts else "watching"
 
+    def format_status_line_compact(self, now: Optional[datetime] = None) -> str:
+        """Short status for live panels (avoids blowing out column layout)."""
+        status = self.status(now)
+        if not status.enabled:
+            return "off"
+        parts: List[str] = []
+        if status.in_cooldown:
+            parts.append(f"cd {status.cooldown_remaining_minutes:.0f}m")
+        nearest = status.nearest
+        if nearest is not None:
+            parts.append(
+                f"{nearest.loss_pct:.1f}%/{nearest.threshold_pct:.1f}%"
+                f"@{nearest.window_minutes:g}m"
+            )
+        elif status.intelligent_tuning:
+            parts.append("auto")
+        return " · ".join(parts) if parts else "ok"
+
     def _recent_noise_pct(self) -> float:
         if len(self._samples) < 3:
             return 0.0

@@ -68,6 +68,7 @@ class PaperTradingState:
     spike_review_enabled: bool = False
     spike_intelligent_tuning: bool = False
     spike_status_line: str = "off"
+    spike_watch_display: str = "off"
     last_spike_review: str = "Never"
     spike_review_count: int = 0
     activity_status: str = "Watching"
@@ -982,6 +983,7 @@ class PaperTradingEngine:
             spike_review_enabled=self._spike_monitor.enabled,
             spike_intelligent_tuning=self._spike_monitor.intelligent_tuning,
             spike_status_line=self._spike_monitor.format_status_line(now),
+            spike_watch_display=self._spike_monitor.format_status_line_compact(now),
             last_spike_review=format_last_spike_review(
                 spike_status.minutes_since_last_review
             ),

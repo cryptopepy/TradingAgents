@@ -21,7 +21,12 @@ from cli.activity_log import (
 )
 from cli.keyboard_input import cbreak_stdin, poll_stdin_key
 from cli.movers_board import MoversBoard
-from cli.paper_display import PaperDisplayContext, render_market_panel
+from cli.paper_display import (
+    PaperDisplayContext,
+    clip_cell,
+    render_market_panel,
+    terminal_column_widths,
+)
 from cli.price_history import PriceHistoryLog
 from tradingagents.simulator.activity_messages import (
     format_close_retest_confirm_prompt,
@@ -50,31 +55,58 @@ MOVERS_CONTROLS_TEXT = (
 )
 
 
-def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -> Table:
+def render_paper_state_table(
+    state: PaperTradingState,
+    *,
+    titled: bool = True,
+    width: Optional[int] = None,
+) -> Table:
     """Rich table for portfolio balance, strategy, and PnL."""
     title = f"Paper Trading — {state.symbol}" if titled else None
-    table = Table(title=title, show_header=True, header_style="bold cyan", expand=True, pad_edge=False)
-    table.add_column("Field", style="dim", min_width=12)
-    table.add_column("Value", justify="right", min_width=14)
-    table.add_row("Strategy", f"{state.strategy_name} ({state.lookback})")
-    table.add_row("Status", state.activity_status)
+    value_max = max(12, (width - 20)) if width else 24
+    table = Table(
+        title=title,
+        show_header=True,
+        header_style="bold cyan",
+        expand=False,
+        pad_edge=False,
+        width=width,
+    )
+    table.add_column("Field", style="dim", min_width=10, max_width=14, no_wrap=True)
+    table.add_column(
+        "Value",
+        justify="right",
+        min_width=12,
+        max_width=value_max,
+        overflow="ellipsis",
+        no_wrap=True,
+    )
+    table.add_row("Strategy", clip_cell(f"{state.strategy_name} ({state.lookback})", value_max))
+    table.add_row("Status", clip_cell(state.activity_status, value_max))
     table.add_row("Signal", state.signal)
-    table.add_row("Price", f"${state.price:,.4f} ({state.price_source})")
+    table.add_row(
+        "Price",
+        clip_cell(f"${state.price:,.4f} ({state.price_source})", value_max),
+    )
     if state.price_endpoint:
-        table.add_row("Price endpoint", state.price_endpoint)
+        table.add_row("Price endpoint", clip_cell(state.price_endpoint, value_max))
     if state.vendor_failures:
-        table.add_row("Skipped vendors", state.vendor_failures)
+        table.add_row("Skipped vendors", clip_cell(state.vendor_failures, value_max))
     table.add_row("Equity", f"${state.equity:,.2f}")
     table.add_row("Cash", f"${state.cash:,.2f}")
     pnl_style = "green" if state.pnl >= 0 else "red"
     table.add_row("PnL", f"[{pnl_style}]${state.pnl:,.2f} ({state.pnl_pct:+.2f}%)[/{pnl_style}]")
+    sl_str = f"{state.stop_loss_pct * 100:.1f}%" if state.stop_loss_pct is not None else "off"
+    tp_str = f"{state.take_profit_pct * 100:.1f}%" if state.take_profit_pct is not None else "off"
     table.add_row(
         "Stop / TP",
-        f"{state.stop_loss_pct * 100:.1f}% / {state.take_profit_pct * 100:.1f}%",
+        f"{sl_str} / {tp_str}",
     )
+    dd_val = f"{state.drawdown_pct:.2f}%" if state.drawdown_pct is not None else "0.00%"
+    dd_cap = f"{state.max_drawdown_pct:.1f}% cap" if state.max_drawdown_pct is not None else "no cap"
     table.add_row(
         "Drawdown",
-        f"{state.drawdown_pct:.2f}% / {state.max_drawdown_pct:.1f}% cap",
+        f"{dd_val} / {dd_cap}",
     )
     if state.adaptive_enabled:
         table.add_row("Last DD review", state.last_drawdown_review)
@@ -87,7 +119,10 @@ def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -
     if state.spike_review_enabled:
         spike_mode = "auto-tuned" if state.spike_intelligent_tuning else "fixed"
         table.add_row("Fast-move review", f"on ({spike_mode})")
-        table.add_row("Fast-move watch", state.spike_status_line)
+        table.add_row(
+            "Fast-move watch",
+            clip_cell(state.spike_watch_display, value_max),
+        )
         table.add_row("Last fast-move review", state.last_spike_review)
         table.add_row("Fast-move reviews", str(state.spike_review_count))
     else:
@@ -97,13 +132,18 @@ def render_paper_state_table(state: PaperTradingState, *, titled: bool = True) -
     return table
 
 
-def render_paper_portfolio_panel(state: PaperTradingState) -> Panel:
+def render_paper_portfolio_panel(
+    state: PaperTradingState,
+    *,
+    width: Optional[int] = None,
+) -> Panel:
     """Portfolio table wrapped in a panel (matches market / ticks styling)."""
     return Panel(
-        render_paper_state_table(state, titled=False),
+        render_paper_state_table(state, titled=False, width=width),
         title=f"Paper Trading — {state.symbol}",
         border_style="cyan",
-        expand=True,
+        expand=False,
+        width=width,
     )
 
 
@@ -120,40 +160,54 @@ def render_paper_live_display(
     if log is not None and log.enabled:
         parts.append(log.render_panel())
 
-    market_panel = render_market_panel(
-        state,
-        ctx,
-        session_high=price_history.session_high if price_history else None,
-        session_low=price_history.session_low if price_history else None,
-    )
+    session_high = price_history.session_high if price_history else None
+    session_low = price_history.session_low if price_history else None
+
+    def _market_panel(width: int) -> Panel:
+        return render_market_panel(
+            state,
+            ctx,
+            session_high=session_high,
+            session_low=session_low,
+            width=width,
+        )
 
     if ctx.show_movers and movers_board is not None:
+        w_left, w_right = terminal_column_widths(2)
         parts.append(
             Columns(
-                [render_paper_portfolio_panel(state), market_panel],
-                expand=True,
-                equal=False,
+                [
+                    render_paper_portfolio_panel(state, width=w_left),
+                    _market_panel(w_right),
+                ],
+                expand=False,
+                equal=True,
             )
         )
         parts.append(movers_board.render_panel(active_pair=state.symbol))
     elif price_history is not None:
+        w_left, w_mid, w_right = terminal_column_widths(3)
         parts.append(
             Columns(
                 [
-                    render_paper_portfolio_panel(state),
-                    market_panel,
-                    price_history.render_panel(),
+                    render_paper_portfolio_panel(state, width=w_left),
+                    _market_panel(w_mid),
+                    price_history.render_panel(width=w_right),
                 ],
-                expand=True,
-                equal=False,
+                expand=False,
+                equal=True,
             )
         )
     else:
+        w_left, w_right = terminal_column_widths(2)
         parts.append(
             Columns(
-                [render_paper_portfolio_panel(state), market_panel],
-                expand=True,
-                equal=False,
+                [
+                    render_paper_portfolio_panel(state, width=w_left),
+                    _market_panel(w_right),
+                ],
+                expand=False,
+                equal=True,
             )
         )
     parts.append(_render_footer_controls(ctx))

@@ -118,6 +118,9 @@ class TestVolatilitySpikeMonitor:
         line = monitor.format_status_line(start)
         assert "auto-tuned" in line
         assert "@" in line
+        compact = monitor.format_status_line_compact(start)
+        assert len(compact) < len(line)
+        assert "chop" not in compact
 
     def test_disabled_monitor_never_triggers(self):
         monitor = VolatilitySpikeMonitor(

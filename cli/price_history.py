@@ -79,16 +79,28 @@ class PriceHistoryLog:
         self._session_high = None
         self._session_low = None
 
-    def render_panel(self, *, title: str = "Price ticks") -> Panel:
+    def render_panel(self, *, title: str = "Price ticks", width: Optional[int] = None) -> Panel:
         if not self._samples:
             body = Text("Waiting for ticks…", style="dim italic")
-            return Panel(body, title=title, border_style="magenta", expand=True)
+            return Panel(
+                body,
+                title=title,
+                border_style="magenta",
+                expand=False,
+                width=width,
+            )
 
-        table = Table(show_header=True, header_style="bold magenta", expand=True, pad_edge=False)
-        table.add_column("Time", style="dim", min_width=10, no_wrap=True)
-        table.add_column("Price", justify="right", min_width=14, no_wrap=True)
-        table.add_column("Δ", justify="right", min_width=16, no_wrap=True)
-        table.add_column("Source", min_width=10, no_wrap=True)
+        table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            expand=False,
+            pad_edge=False,
+            width=width,
+        )
+        table.add_column("Time", style="dim", min_width=8, max_width=10, no_wrap=True)
+        table.add_column("Price", justify="right", min_width=10, max_width=12, no_wrap=True)
+        table.add_column("Δ", justify="right", min_width=10, max_width=14, overflow="ellipsis", no_wrap=True)
+        table.add_column("Src", min_width=6, max_width=8, overflow="ellipsis", no_wrap=True)
 
         for sample in reversed(self._samples):
             if sample.delta > 0:
@@ -132,4 +144,10 @@ class PriceHistoryLog:
             )
 
         body = Group(table, Text(""), summary)
-        return Panel(body, title=title, border_style="magenta", expand=True)
+        return Panel(
+            body,
+            title=title,
+            border_style="magenta",
+            expand=False,
+            width=width,
+        )
