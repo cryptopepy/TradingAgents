@@ -19,6 +19,7 @@ from tradingagents.backtest.engine import _last_closed_bar_dt
 from tradingagents.backtest.matcher import SimulatedMatcher
 from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
+from tradingagents.resilience import retry_delays_from_config, retry_with_backoff_optional
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price, get_live_feed_router
 from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
@@ -96,6 +97,7 @@ class PaperTradingEngine:
         self._thread: Optional[threading.Thread] = None
         self._operation_lock = threading.RLock()
         self._last_signal_bar: Optional[datetime] = None
+        self._bg_action_running = False
         self._signals_halted = False
         self._feed_unavailable = False
         self._last_good_quote: Optional[LivePrice] = None
@@ -141,8 +143,26 @@ class PaperTradingEngine:
 
     def _fetch_price(self) -> Optional[LivePrice]:
         """Return a live quote, or None when all vendors failed (no mock trading)."""
-        quote = fetch_live_spot_price(self.session.symbol, self.config)
-        if quote.source == PriceSource.PLACEHOLDER:
+        delays = retry_delays_from_config(self.config)
+
+        def _attempt() -> LivePrice:
+            quote = fetch_live_spot_price(self.session.symbol, self.config)
+            if quote.source == PriceSource.PLACEHOLDER:
+                raise RuntimeError("all live price vendors failed")
+            return quote
+
+        def _on_retry(attempt: int, wait: float, exc: Exception) -> None:
+            self._emit_activity(
+                f"Price API error — retry {attempt} in {wait:.0f}s ({exc})"
+            )
+
+        quote = retry_with_backoff_optional(
+            _attempt,
+            delays=delays,
+            on_retry=_on_retry,
+            label=f"live price ({self.session.symbol})",
+        )
+        if quote is None:
             self._feed_unavailable = True
             self._log_feed_unavailable()
             return None
@@ -229,13 +249,37 @@ class PaperTradingEngine:
             return self.session.signal
         self._last_signal_bar = bar_open
 
-        raw = compute_strategy_signal(
-            self.session.symbol,
-            self.session.strategy_name,
-            self.session.parameters,
-            self.session.lookback,
-            config=self.config,
-        )
+        delays = retry_delays_from_config(self.config)
+
+        def _load_signal() -> str:
+            return compute_strategy_signal(
+                self.session.symbol,
+                self.session.strategy_name,
+                self.session.parameters,
+                self.session.lookback,
+                config=self.config,
+            )
+
+        def _on_retry(attempt: int, wait: float, exc: Exception) -> None:
+            self._emit_activity(
+                f"Signal data API error — retry {attempt} in {wait:.0f}s ({exc})"
+            )
+
+        try:
+            raw = retry_with_backoff_optional(
+                _load_signal,
+                delays=delays,
+                on_retry=_on_retry,
+                label=f"strategy signal ({self.session.symbol})",
+            )
+        except Exception as exc:
+            self._emit_activity(f"Signal refresh failed — keeping last signal ({exc})")
+            return self.session.signal
+
+        if raw is None:
+            self._emit_activity("Signal refresh failed after retries — keeping last signal")
+            return self.session.signal
+
         signal = StrategySignal.from_string(raw)
         self.session.signal = signal
         return signal
@@ -364,42 +408,86 @@ class PaperTradingEngine:
             self._operation_lock.release()
 
     def _tick_locked(self) -> TickEvaluationResult:
-        quote = self._fetch_price()
-        if quote is None:
-            return self._tick_feed_unavailable()
-        self._log_price_feed(quote)
-        signal = (
-            self.refresh_signal()
-            if not self._signals_halted and not self._feed_unavailable
-            else StrategySignal.FLAT
-        )
-        result = evaluate_live_market_tick(
-            self.portfolio,
-            quote.price,
-            signal,
-            asset=self.session.symbol,
-            matcher=self.matcher,
-            stop_loss_pct=self.session.stop_loss_pct,
-            take_profit_pct=self.session.take_profit_pct,
-            slippage_bps=self.session.slippage_bps,
-            sizing_pct=float(
-                self.session.position_size_pct
-                if self.session.position_size_pct != 1.0
-                else self.config.get("position_size_pct", 1.0)
-            ),
+        try:
+            quote = self._fetch_price()
+            if quote is None:
+                return self._tick_feed_unavailable()
+            self._log_price_feed(quote)
+            signal = (
+                self.refresh_signal()
+                if not self._signals_halted and not self._feed_unavailable
+                else StrategySignal.FLAT
+            )
+            result = evaluate_live_market_tick(
+                self.portfolio,
+                quote.price,
+                signal,
+                asset=self.session.symbol,
+                matcher=self.matcher,
+                stop_loss_pct=self.session.stop_loss_pct,
+                take_profit_pct=self.session.take_profit_pct,
+                slippage_bps=self.session.slippage_bps,
+                sizing_pct=float(
+                    self.session.position_size_pct
+                    if self.session.position_size_pct != 1.0
+                    else self.config.get("position_size_pct", 1.0)
+                ),
+            )
+            self._tick_history.append(result)
+            self._log_tick_action(result)
+            self._adaptive.record_equity(result.portfolio_equity, result.timestamp)
+
+            if self.adaptive_enabled and self._adaptive.should_rebacktest(result.timestamp):
+                self._schedule_adaptive_rebacktest(result.timestamp)
+
+            state = self.get_state(quote)
+            self._persist_session(quote)
+            if self.on_state_change:
+                self.on_state_change(state)
+            return result
+        except Exception as exc:
+            logger.warning("Paper tick error — continuing next interval: %s", exc, exc_info=True)
+            self._emit_activity(f"Tick error — continuing next interval ({exc})")
+            return self._tick_error_skipped(exc)
+
+    def _tick_error_skipped(self, exc: Exception) -> TickEvaluationResult:
+        now = datetime.now(timezone.utc)
+        display = self._quote_for_display(None)
+        result = TickEvaluationResult(
+            timestamp=now,
+            price=display.price,
+            signal=StrategySignal.FLAT,
+            action_taken="error",
+            portfolio_equity=self.portfolio.equity,
         )
         self._tick_history.append(result)
-        self._log_tick_action(result)
-        self._adaptive.record_equity(result.portfolio_equity, result.timestamp)
-
-        if self.adaptive_enabled and self._adaptive.should_rebacktest(result.timestamp):
-            self._run_adaptive_rebacktest(result.timestamp)
-
-        state = self.get_state(quote)
-        self._persist_session(quote)
+        self._adaptive.record_equity(result.portfolio_equity, now)
+        state = self.get_state(display)
         if self.on_state_change:
             self.on_state_change(state)
         return result
+
+    def _schedule_adaptive_rebacktest(self, now: datetime) -> None:
+        if self._bg_action_running:
+            return
+
+        def _worker() -> None:
+            self._bg_action_running = True
+            try:
+                with self._operation_lock:
+                    self._run_adaptive_rebacktest(now)
+            except Exception as exc:
+                logger.warning("Adaptive re-backtest failed — continuing: %s", exc, exc_info=True)
+                self._emit_activity(f"Adaptive re-backtest failed — continuing ({exc})")
+            finally:
+                self._bg_action_running = False
+                self._signals_halted = False
+
+        threading.Thread(
+            target=_worker,
+            name=f"paper-adaptive-{self.session.symbol}",
+            daemon=True,
+        ).start()
 
     def close_open_position(self, *, reoptimize: bool = True) -> bool:
         """Close the open position at the current mark price and optionally re-optimize."""
@@ -550,8 +638,8 @@ class PaperTradingEngine:
         self.portfolio.fee_bps = self.session.slippage_bps
         self.matcher.slippage_bps = 0.0
         self._last_signal_bar = None
-        self.session.signal = StrategySignal.from_string(
-            compute_strategy_signal(
+        try:
+            raw = compute_strategy_signal(
                 self.session.symbol,
                 new_name,
                 self.session.parameters,
@@ -559,7 +647,10 @@ class PaperTradingEngine:
                 end_date,
                 config=self.config,
             )
-        )
+        except Exception as exc:
+            self._emit_activity(f"Deploy signal skipped — keeping prior signal ({exc})")
+            raw = self.session.signal.value
+        self.session.signal = StrategySignal.from_string(raw)
 
         if new_name != old_name:
             if self.on_strategy_switch:
@@ -587,52 +678,64 @@ class PaperTradingEngine:
         self._emit_activity(banner)
         self._signals_halted = True
         on_start, on_complete, on_skipped, on_provider = self._make_horizon_callbacks()
+        delays = retry_delays_from_config(self.config)
 
         try:
             from tradingagents.dataflows.trading_fees import paper_transaction_cost_pct
 
-            optimization = optimize_strategies(
-                self.session.symbol,
-                end_date,
-                config=self.config,
-                stop_loss_pct=self.session.stop_loss_pct,
-                take_profit_pct=self.session.take_profit_pct,
-                transaction_cost_pct=paper_transaction_cost_pct(
-                    self.session.symbol, self.config
-                ),
-                on_horizon_start=on_start,
-                on_horizon_complete=on_complete,
-                on_horizon_skipped=on_skipped,
-                on_horizon_provider_attempt=on_provider,
-            )
-        except Exception as exc:
-            logger.warning("%s: %s", fail_label, exc)
-            self._emit_activity(f"{fail_label} — {exc}")
-            self._signals_halted = False
-            return
+            def _on_retry(attempt: int, wait: float, exc: Exception) -> None:
+                self._emit_activity(
+                    f"{fail_label} — API error, retry {attempt} in {wait:.0f}s ({exc})"
+                )
 
-        if optimization.winner is None or not optimization.deployable:
-            reason = (
-                "; ".join(optimization.gate_failures)
-                if optimization.gate_failures
-                else "no winning strategy found"
+            optimization = retry_with_backoff_optional(
+                lambda: optimize_strategies(
+                    self.session.symbol,
+                    end_date,
+                    config=self.config,
+                    stop_loss_pct=self.session.stop_loss_pct,
+                    take_profit_pct=self.session.take_profit_pct,
+                    transaction_cost_pct=paper_transaction_cost_pct(
+                        self.session.symbol, self.config
+                    ),
+                    on_horizon_start=on_start,
+                    on_horizon_complete=on_complete,
+                    on_horizon_skipped=on_skipped,
+                    on_horizon_provider_attempt=on_provider,
+                ),
+                delays=delays,
+                on_retry=_on_retry,
+                label=fail_label,
             )
-            self._emit_activity(f"{not_deployable_label} ({reason})")
-            on_fail = self.config.get("winner_on_gate_fail", "keep")
-            if on_fail == "flat":
-                self.session.signal = StrategySignal.FLAT
+            if optimization is None:
+                self._emit_activity(f"{fail_label} — continuing after API retries")
+                return
+
+            if optimization.winner is None or not optimization.deployable:
+                reason = (
+                    "; ".join(optimization.gate_failures)
+                    if optimization.gate_failures
+                    else "no winning strategy found"
+                )
+                self._emit_activity(f"{not_deployable_label} ({reason})")
+                on_fail = self.config.get("winner_on_gate_fail", "keep")
+                if on_fail == "flat":
+                    self.session.signal = StrategySignal.FLAT
+                if adaptive_followup:
+                    self._adaptive.mark_rebacktest_done(now)
+                return
+
+            self._emit_activity(
+                format_optimization_winner(optimization.winner, prefix=winner_prefix)
+            )
+            self._deploy_optimization_winner(optimization, end_date)
             if adaptive_followup:
                 self._adaptive.mark_rebacktest_done(now)
+        except Exception as exc:
+            logger.warning("%s: %s", fail_label, exc, exc_info=True)
+            self._emit_activity(f"{fail_label} — continuing ({exc})")
+        finally:
             self._signals_halted = False
-            return
-
-        self._emit_activity(
-            format_optimization_winner(optimization.winner, prefix=winner_prefix)
-        )
-        self._deploy_optimization_winner(optimization, end_date)
-        if adaptive_followup:
-            self._adaptive.mark_rebacktest_done(now)
-        self._signals_halted = False
 
     def _run_adaptive_rebacktest(self, now: datetime) -> None:
         """Re-run optimization and switch strategy when a better one is found."""
@@ -705,10 +808,16 @@ class PaperTradingEngine:
         ticks = 0
         try:
             while not self._stop_event.is_set():
-                result = self.tick()
-                if on_tick:
+                try:
+                    result = self.tick()
+                except Exception as exc:
+                    logger.exception("Paper tick crashed — continuing: %s", exc)
+                    self._emit_activity(f"Tick crashed — continuing next interval ({exc})")
+                    result = None
+                if result is not None and on_tick:
                     on_tick(result)
-                ticks += 1
+                if result is not None:
+                    ticks += 1
                 if max_ticks is not None and ticks >= max_ticks:
                     break
                 key = _sleep_until_stopped_or_key(self._stop_event, interval, poll_key)

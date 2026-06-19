@@ -137,9 +137,10 @@ class TestPaperTradingEngine:
         assert state.last_drawdown_review == "12m ago"
         assert state.effective_drawdown_window_minutes == pytest.approx(60.0)
 
+    @patch("tradingagents.simulator.paper_engine.time.sleep")
     @patch("tradingagents.simulator.paper_engine.compute_strategy_signal", return_value="flat")
     @patch("tradingagents.simulator.paper_engine.fetch_live_spot_price")
-    def test_tick_survives_transient_feed_outage(self, mock_price, _signal):
+    def test_tick_survives_transient_feed_outage(self, mock_price, _signal, _sleep):
         from datetime import datetime, timezone
 
         good = LivePrice(
@@ -155,7 +156,7 @@ class TestPaperTradingEngine:
             timestamp=datetime.now(timezone.utc),
             endpoint="unavailable",
         )
-        mock_price.side_effect = [good, bad, good]
+        mock_price.side_effect = [good, bad, bad, bad, bad, good]
         session = PaperTradingSession(
             symbol="BTC/USDT",
             strategy_name="ema_crossover",

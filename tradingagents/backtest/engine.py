@@ -1055,7 +1055,11 @@ def compute_strategy_signal(
         return "flat"
     lb = lookback if isinstance(lookback, LookbackWindow) else LookbackWindow(str(lookback))
     end = end_date or datetime.now().strftime("%Y-%m-%d")
-    df = fetch_historical_crypto(symbol, end, lb, config=config)
+    try:
+        df = fetch_historical_crypto(symbol, end, lb, config=config)
+    except Exception as exc:
+        logger.warning("Signal history unavailable for %s (%s): %s", symbol, lb.value, exc)
+        return "flat"
     if df.empty:
         return "flat"
     strategy = build_strategy(strategy_name, parameters)

@@ -1,3 +1,4 @@
+import json
 import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
@@ -12,6 +13,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_DEEP_THINK_LLM":       "deep_think_llm",
     "TRADINGAGENTS_QUICK_THINK_LLM":      "quick_think_llm",
     "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
+    "TRADINGAGENTS_LLM_USE_RESPONSES_API": "llm_use_responses_api",
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
@@ -81,6 +83,44 @@ def _coerce(value: str, reference):
     return value
 
 
+def _merge_config_dict(base: dict, overlay: dict) -> dict:
+    """Shallow merge with one-level-deep dict merge (matches set_config)."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_json_config_overlay() -> dict:
+    """Load optional config.json (project dir or ~/.tradingagents/config.json)."""
+    candidates = []
+    env_path = os.environ.get("TRADINGAGENTS_CONFIG_FILE", "").strip()
+    if env_path:
+        candidates.append(env_path)
+    candidates.extend(
+        [
+            os.path.join(os.getcwd(), "config.json"),
+            os.path.join(_TRADINGAGENTS_HOME, "config.json"),
+        ]
+    )
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError) as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("Ignoring invalid config file %s: %s", path, exc)
+    return {}
+
+
 def _apply_env_overrides(config: dict) -> dict:
     """Apply TRADINGAGENTS_* env vars to the config dict in-place."""
     for env_var, key in _ENV_OVERRIDES.items():
@@ -91,7 +131,7 @@ def _apply_env_overrides(config: dict) -> dict:
     return config
 
 
-DEFAULT_CONFIG = _apply_env_overrides({
+_BASE_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
@@ -110,6 +150,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # provider-specific URL here would leak (e.g. OpenAI's /v1 was previously
     # being forwarded to Gemini, producing malformed request URLs).
     "backend_url": None,
+    # None = auto (Responses API only for native api.openai.com). Set False for
+    # local OpenAI-compatible proxies (e.g. http://localhost:1135/v1).
+    "llm_use_responses_api": None,
+    "llm_max_retries": 3,
+    # API retry schedule for paper trading / long-running sessions (seconds).
+    "api_retry_delays_seconds": [10, 30, 180],
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
@@ -240,4 +286,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "SOL": "BTC/USDT",
         "": "BTC/USDT",
     },
-})
+}
+
+DEFAULT_CONFIG = _apply_env_overrides(
+    _merge_config_dict(_BASE_CONFIG, _load_json_config_overlay())
+)
