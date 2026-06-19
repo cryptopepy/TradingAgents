@@ -1430,6 +1430,11 @@ def paper_cmd(
         "--adaptive/--no-adaptive",
         help="Re-run backtests and switch strategy on sustained drawdown.",
     ),
+    spike_review: Optional[bool] = typer.Option(
+        None,
+        "--spike-review/--no-spike-review",
+        help="Re-check strategy early when equity drops quickly (requires adaptive).",
+    ),
     ticks: Optional[int] = typer.Option(
         None,
         "--ticks",
@@ -1469,6 +1474,7 @@ def paper_cmd(
             ticks=ticks,
             live_mode=live,
             adaptive_enabled=adaptive,
+            spike_review_enabled=spike_review,
             interactive=interactive,
             fresh_start=fresh,
         )

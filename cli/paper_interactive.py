@@ -37,6 +37,7 @@ class PaperRunParams:
     stop_loss_pct: float
     take_profit_pct: Optional[float]
     adaptive_enabled: bool
+    spike_review_enabled: bool
     drawdown_window_minutes: float
     max_drawdown_pct: float
     resume_saved_session: bool = False
@@ -323,6 +324,18 @@ def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     return True, window, threshold
 
 
+def _prompt_spike_settings(config: dict, *, adaptive_enabled: bool) -> bool:
+    if not adaptive_enabled:
+        return False
+    enabled = questionary.confirm(
+        "Enable fast-movement reviews (re-check when equity drops quickly)?",
+        default=bool(config.get("paper_spike_review_enabled", True)),
+    ).ask()
+    if enabled is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    return bool(enabled)
+
+
 def prompt_paper_params(
     config: dict | None = None,
     *,
@@ -381,6 +394,7 @@ def prompt_paper_params(
         resolved_live = bool(live_answer)
 
     adaptive, window, threshold = _prompt_adaptive_settings(cfg)
+    spike_review = _prompt_spike_settings(cfg, adaptive_enabled=adaptive)
 
     return PaperRunParams(
         ticker=resolved_ticker,
@@ -392,6 +406,7 @@ def prompt_paper_params(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         adaptive_enabled=adaptive,
+        spike_review_enabled=spike_review,
         drawdown_window_minutes=window,
         max_drawdown_pct=threshold,
         resume_saved_session=resume_saved,
@@ -407,6 +422,7 @@ def resolve_paper_params(
     ticks: Optional[int],
     live_mode: bool,
     adaptive_enabled: Optional[bool],
+    spike_review_enabled: Optional[bool],
     interactive: bool,
     fresh_start: bool = False,
     config: dict | None = None,
@@ -449,6 +465,8 @@ def resolve_paper_params(
             params = replace(params, live_mode=True)
         if adaptive_enabled is not None:
             params = replace(params, adaptive_enabled=adaptive_enabled)
+        if spike_review_enabled is not None:
+            params = replace(params, spike_review_enabled=spike_review_enabled)
         return params
 
     resolved_ticker = validate_ticker(ticker or DEFAULT_TICKER)
@@ -464,6 +482,13 @@ def resolve_paper_params(
         if adaptive_enabled is not None
         else bool(cfg.get("paper_adaptive_enabled", True))
     )
+    resolved_spike = (
+        spike_review_enabled
+        if spike_review_enabled is not None
+        else bool(cfg.get("paper_spike_review_enabled", True))
+    )
+    if not resolved_adaptive:
+        resolved_spike = False
     return PaperRunParams(
         ticker=resolved_ticker,
         strategy_name=validate_strategy_name(strategy_name),
@@ -474,6 +499,7 @@ def resolve_paper_params(
         stop_loss_pct=_default_stop_loss_pct(cfg),
         take_profit_pct=_default_take_profit_pct(cfg),
         adaptive_enabled=resolved_adaptive,
+        spike_review_enabled=resolved_spike,
         drawdown_window_minutes=_default_drawdown_window(cfg),
         max_drawdown_pct=_default_drawdown_pct(cfg),
         resume_saved_session=resume_saved,
@@ -486,6 +512,9 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_trade_enabled"] = True
     cfg["paper_initial_equity"] = params.initial_equity
     cfg["paper_adaptive_enabled"] = params.adaptive_enabled
+    cfg["paper_spike_review_enabled"] = (
+        params.spike_review_enabled and params.adaptive_enabled
+    )
     cfg["drawdown_time_window_minutes"] = params.drawdown_window_minutes
     cfg["paper_loss_review_minutes"] = params.drawdown_window_minutes
     cfg["max_allowed_drawdown_pct"] = params.max_drawdown_pct

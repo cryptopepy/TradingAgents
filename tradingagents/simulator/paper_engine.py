@@ -23,6 +23,7 @@ from tradingagents.resilience import DEFAULT_API_RETRY_DELAYS, retry_with_backof
 from tradingagents.dataflows.dummy_feed import DummyPriceFeed
 from tradingagents.dataflows.live_prices import LivePrice, PriceSource, fetch_live_spot_price, get_live_feed_router
 from tradingagents.simulator.adaptive import AdaptiveStrategyMonitor, format_last_drawdown_review
+from tradingagents.simulator.volatility_spike import VolatilitySpikeMonitor
 from tradingagents.simulator.core import (
     PaperTradingSession,
     StrategySignal,
@@ -133,6 +134,16 @@ class PaperTradingEngine:
             self._adaptive.note_drawdown_review(self._pending_last_drawdown_review_at)
             self._pending_last_drawdown_review_at = None
 
+        spike_on = adaptive_enabled and bool(
+            self.config.get("paper_spike_review_enabled", True)
+        )
+        self._spike_monitor = VolatilitySpikeMonitor.from_config(
+            self.config,
+            lookback=self.session.lookback,
+            enabled=spike_on,
+            initial_equity=self.portfolio.initial_equity,
+        )
+
     @property
     def tick_history(self) -> List[TickEvaluationResult]:
         return list(self._tick_history)
@@ -209,7 +220,7 @@ class PaperTradingEngine:
             portfolio_equity=self.portfolio.equity,
         )
         self._tick_history.append(result)
-        self._adaptive.record_equity(result.portfolio_equity, now)
+        self._record_equity_samples(result.portfolio_equity, now)
         state = self.get_state(display)
         if self.on_state_change:
             self.on_state_change(state)
@@ -230,7 +241,7 @@ class PaperTradingEngine:
             portfolio_equity=self.portfolio.equity,
         )
         self._tick_history.append(result)
-        self._adaptive.record_equity(result.portfolio_equity, now)
+        self._record_equity_samples(result.portfolio_equity, now)
         state = self.get_state(display)
         if self.on_state_change:
             self.on_state_change(state)
@@ -435,10 +446,14 @@ class PaperTradingEngine:
             )
             self._tick_history.append(result)
             self._log_tick_action(result)
-            self._adaptive.record_equity(result.portfolio_equity, result.timestamp)
+            self._record_equity_samples(result.portfolio_equity, result.timestamp)
 
-            if self.adaptive_enabled and self._adaptive.should_rebacktest(result.timestamp):
-                self._schedule_adaptive_rebacktest(result.timestamp)
+            if self.adaptive_enabled:
+                spike = self._spike_monitor.check(result.timestamp)
+                if spike is not None:
+                    self._schedule_spike_rebacktest(result.timestamp, spike.reason)
+                elif self._adaptive.should_rebacktest(result.timestamp):
+                    self._schedule_adaptive_rebacktest(result.timestamp)
 
             state = self.get_state(quote)
             self._persist_session(quote)
@@ -461,11 +476,15 @@ class PaperTradingEngine:
             portfolio_equity=self.portfolio.equity,
         )
         self._tick_history.append(result)
-        self._adaptive.record_equity(result.portfolio_equity, now)
+        self._record_equity_samples(result.portfolio_equity, now)
         state = self.get_state(display)
         if self.on_state_change:
             self.on_state_change(state)
         return result
+
+    def _record_equity_samples(self, equity: float, timestamp: datetime) -> None:
+        self._adaptive.record_equity(equity, timestamp)
+        self._spike_monitor.record_equity(equity, timestamp)
 
     def _schedule_adaptive_rebacktest(self, now: datetime) -> None:
         if self._bg_action_running:
@@ -486,6 +505,30 @@ class PaperTradingEngine:
         threading.Thread(
             target=_worker,
             name=f"paper-adaptive-{self.session.symbol}",
+            daemon=True,
+        ).start()
+
+    def _schedule_spike_rebacktest(self, now: datetime, reason: str) -> None:
+        if self._bg_action_running:
+            return
+        self._spike_monitor.note_review_started(now)
+        self._adaptive.note_drawdown_review(now)
+
+        def _worker() -> None:
+            self._bg_action_running = True
+            try:
+                with self._operation_lock:
+                    self._run_spike_rebacktest(now, reason)
+            except Exception as exc:
+                logger.warning("Fast-move review failed — continuing: %s", exc, exc_info=True)
+                self._emit_activity(f"Fast-move review failed — continuing ({exc})")
+            finally:
+                self._bg_action_running = False
+                self._signals_halted = False
+
+        threading.Thread(
+            target=_worker,
+            name=f"paper-spike-{self.session.symbol}",
             daemon=True,
         ).start()
 
@@ -519,7 +562,7 @@ class PaperTradingEngine:
             self._emit_activity(
                 format_tick_action("manual_close", quote.price, self.portfolio.equity)
             )
-            self._adaptive.record_equity(self.portfolio.equity, now)
+            self._record_equity_samples(self.portfolio.equity, now)
 
             if reoptimize:
                 self._run_manual_rebacktest(now)
@@ -660,6 +703,21 @@ class PaperTradingEngine:
             self._emit_activity(
                 f"Lookback refreshed: {old_lookback} → {optimization.winner.lookback}"
             )
+        self._spike_monitor.update_lookback(self.session.lookback, self.config)
+
+    def _should_switch_on_spike(self, optimization: OptimizationResult) -> bool:
+        """Conservative gate — only switch when an alternative is materially better."""
+        if optimization.winner is None or not optimization.deployable:
+            return False
+        winner = optimization.winner
+        same_plan = (
+            winner.strategy_name == self.session.strategy_name
+            and winner.lookback == self.session.lookback
+        )
+        if same_plan:
+            return False
+        min_edge = float(self.config.get("paper_spike_switch_min_net_profit", 0.005))
+        return winner.historical_profit_ratio >= min_edge
 
     def _run_optimization_cycle(
         self,
@@ -670,6 +728,7 @@ class PaperTradingEngine:
         adaptive_followup: bool,
         fail_label: str,
         not_deployable_label: str,
+        conservative_switch: bool = False,
     ) -> None:
         """Re-run optimization, log horizon results, and deploy a winner when allowed."""
         end_date = now.strftime("%Y-%m-%d")
@@ -728,6 +787,17 @@ class PaperTradingEngine:
             self._emit_activity(
                 format_optimization_winner(optimization.winner, prefix=winner_prefix)
             )
+            if conservative_switch and not self._should_switch_on_spike(optimization):
+                winner = optimization.winner
+                self._emit_activity(
+                    "Fast-move review — keeping "
+                    f"{self.session.strategy_name} ({self.session.lookback}); "
+                    f"alternative {winner.strategy_name} ({winner.lookback}) "
+                    f"not materially better (net {winner.historical_profit_ratio:+.2%})"
+                )
+                if adaptive_followup:
+                    self._adaptive.mark_rebacktest_done(now)
+                return
             self._deploy_optimization_winner(optimization, end_date)
             if adaptive_followup:
                 self._adaptive.mark_rebacktest_done(now)
@@ -755,6 +825,25 @@ class PaperTradingEngine:
             adaptive_followup=True,
             fail_label="Re-backtest failed",
             not_deployable_label="Re-backtest complete — not deployable",
+        )
+
+    def _run_spike_rebacktest(self, now: datetime, reason: str) -> None:
+        """Re-run optimization after a rapid equity drop; switch only if clearly better."""
+        logger.info(
+            "Fast-move review triggered for %s (%s)",
+            self.session.symbol,
+            reason,
+        )
+        from tradingagents.simulator.activity_messages import format_volatility_spike_banner
+
+        self._run_optimization_cycle(
+            now,
+            banner=format_volatility_spike_banner(reason),
+            winner_prefix="Fast-move review winner",
+            adaptive_followup=True,
+            conservative_switch=True,
+            fail_label="Fast-move review failed",
+            not_deployable_label="Fast-move review — not deployable",
         )
 
     def get_state(self, quote: Optional[LivePrice] = None) -> PaperTradingState:

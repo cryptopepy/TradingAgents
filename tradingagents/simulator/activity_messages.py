@@ -105,6 +105,10 @@ def format_drawdown_rebacktest_banner(drawdown_pct: float) -> str:
     return f"══ Drawdown review ({drawdown_pct:.2f}%) — re-running backtest ══"
 
 
+def format_volatility_spike_banner(reason: str) -> str:
+    return f"══ Fast-move review ({reason}) — re-checking strategy ══"
+
+
 def format_reanalyze_banner() -> str:
     return "══ Reanalyze (r) — re-running backtest ══"
 

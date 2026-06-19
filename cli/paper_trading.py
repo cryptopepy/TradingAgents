@@ -570,6 +570,7 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     """Interactive paper-trading options (post-analysis deploy flow)."""
     from cli.paper_interactive import (
         _prompt_adaptive_settings,
+        _prompt_spike_settings,
         _prompt_ticks,
         _resolve_equity_and_session,
     )
@@ -583,10 +584,12 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     config["paper_fresh_start"] = start_fresh
 
     adaptive, window, threshold = _prompt_adaptive_settings(config)
+    spike_review = _prompt_spike_settings(config, adaptive_enabled=adaptive)
     config["drawdown_time_window_minutes"] = window
     config["paper_loss_review_minutes"] = window
     config["max_allowed_drawdown_pct"] = threshold
     config["paper_loss_threshold_pct"] = threshold
     config["paper_adaptive_enabled"] = adaptive
+    config["paper_spike_review_enabled"] = spike_review and adaptive
     ticks = _prompt_ticks()
-    return {"adaptive": adaptive, "ticks": ticks}
+    return {"adaptive": adaptive, "spike_review": spike_review, "ticks": ticks}
