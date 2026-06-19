@@ -12,6 +12,18 @@ from rich.table import Table
 from tradingagents.simulator.paper_engine import PaperTradingState
 
 
+def terminal_size() -> tuple[int, int]:
+    """Return (columns, lines) for layout calculations."""
+    size = shutil.get_terminal_size(fallback=(120, 40))
+    return size.columns, size.lines
+
+
+def activity_panel_height(*, reserved_lines: int = 34) -> int:
+    """Lines available for the activity log panel after fixed rows."""
+    _, height = terminal_size()
+    return max(8, height - reserved_lines)
+
+
 def terminal_column_widths(count: int, *, minimum: int = 28) -> list[int]:
     """Divide terminal width so side-by-side panels stay horizontal."""
     total = shutil.get_terminal_size(fallback=(120, 40)).columns

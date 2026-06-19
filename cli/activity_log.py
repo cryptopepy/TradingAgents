@@ -77,10 +77,17 @@ class ActivityLog:
         for message in messages:
             self.append(message)
 
-    def render_panel(self, *, title: str = "Activity", visible_lines: int = 20) -> Panel:
+    def render_panel(
+        self,
+        *,
+        title: str = "Activity",
+        visible_lines: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> Panel:
+        if visible_lines is None:
+            visible_lines = 20
         if not self._lines:
             body = Text("Waiting for events…", style="dim italic")
-            panel_height = 3
         else:
             tail = list(self._lines)[-visible_lines:]
             body = Text()
@@ -91,8 +98,10 @@ class ActivityLog:
                     body.append("\n")
                 body.append(f"{ts} ", style="dim cyan")
                 body.append(line)
-            panel_height = len(tail) + (1 if len(self._lines) > visible_lines else 0) + 2
-        return Panel(body, title=title, border_style="blue", height=panel_height)
+        panel_kwargs: dict = {"title": title, "border_style": "blue"}
+        if height is not None:
+            panel_kwargs["height"] = height
+        return Panel(body, **panel_kwargs)
 
     @property
     def line_count(self) -> int:

@@ -79,7 +79,14 @@ class PriceHistoryLog:
         self._session_high = None
         self._session_low = None
 
-    def render_panel(self, *, title: str = "Price ticks", width: Optional[int] = None) -> Panel:
+    def render_panel(
+        self,
+        *,
+        title: str = "Price ticks",
+        width: Optional[int] = None,
+        max_rows: int = 8,
+        compact_summary: bool = False,
+    ) -> Panel:
         if not self._samples:
             body = Text("Waiting for ticks…", style="dim italic")
             return Panel(
@@ -98,11 +105,12 @@ class PriceHistoryLog:
             width=width,
         )
         table.add_column("Time", style="dim", min_width=8, max_width=10, no_wrap=True)
-        table.add_column("Price", justify="right", min_width=10, max_width=12, no_wrap=True)
-        table.add_column("Δ", justify="right", min_width=10, max_width=14, overflow="ellipsis", no_wrap=True)
-        table.add_column("Src", min_width=6, max_width=8, overflow="ellipsis", no_wrap=True)
+        table.add_column("Price", justify="right", min_width=12, max_width=14, no_wrap=True)
+        table.add_column("Δ", justify="right", min_width=12, max_width=16, overflow="ellipsis", no_wrap=True)
+        table.add_column("Source", min_width=8, max_width=12, overflow="ellipsis", no_wrap=True)
 
-        for sample in reversed(self._samples):
+        visible = list(reversed(self._samples))[:max_rows]
+        for sample in visible:
             if sample.delta > 0:
                 delta_style = "green"
                 delta_text = f"+{sample.delta:,.2f}"
@@ -124,26 +132,46 @@ class PriceHistoryLog:
 
         latest = self._samples[-1]
         summary = Text()
-        summary.append(f"Last: ${latest.price:,.4f} ", style="bold")
-        summary.append(f"({latest.source})", style="dim")
-        if self._session_high is not None and self._session_low is not None:
-            summary.append("\n")
-            summary.append(
-                f"Session H/L: ${self._session_high:,.2f} / ${self._session_low:,.2f}",
-                style="cyan",
-            )
-        if len(self._samples) > 1:
-            first = self._samples[0]
-            session_delta = latest.price - first.price
-            session_pct = (session_delta / first.price * 100.0) if first.price else 0.0
-            style = "green" if session_delta >= 0 else "red"
-            summary.append("\n")
-            summary.append(
-                f"Window Δ: {session_delta:+,.2f} ({session_pct:+.3f}%)",
-                style=style,
-            )
+        if compact_summary:
+            summary.append(f"Last ${latest.price:,.2f} ({latest.source})", style="bold")
+            if self._session_high is not None and self._session_low is not None:
+                summary.append("  ·  ", style="dim")
+                summary.append(
+                    f"H/L ${self._session_high:,.0f}/${self._session_low:,.0f}",
+                    style="cyan",
+                )
+            if len(self._samples) > 1:
+                first = self._samples[0]
+                session_delta = latest.price - first.price
+                session_pct = (session_delta / first.price * 100.0) if first.price else 0.0
+                style = "green" if session_delta >= 0 else "red"
+                summary.append("  ·  ", style="dim")
+                summary.append(
+                    f"Δ {session_delta:+,.2f} ({session_pct:+.3f}%)",
+                    style=style,
+                )
+            body = Group(table, summary)
+        else:
+            summary.append(f"Last: ${latest.price:,.4f} ", style="bold")
+            summary.append(f"({latest.source})", style="dim")
+            if self._session_high is not None and self._session_low is not None:
+                summary.append("\n")
+                summary.append(
+                    f"Session H/L: ${self._session_high:,.2f} / ${self._session_low:,.2f}",
+                    style="cyan",
+                )
+            if len(self._samples) > 1:
+                first = self._samples[0]
+                session_delta = latest.price - first.price
+                session_pct = (session_delta / first.price * 100.0) if first.price else 0.0
+                style = "green" if session_delta >= 0 else "red"
+                summary.append("\n")
+                summary.append(
+                    f"Window Δ: {session_delta:+,.2f} ({session_pct:+.3f}%)",
+                    style=style,
+                )
+            body = Group(table, Text(""), summary)
 
-        body = Group(table, Text(""), summary)
         return Panel(
             body,
             title=title,

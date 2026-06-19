@@ -23,9 +23,11 @@ from cli.keyboard_input import cbreak_stdin, poll_stdin_key
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
     PaperDisplayContext,
+    activity_panel_height,
     clip_cell,
     render_market_panel,
     terminal_column_widths,
+    terminal_size,
 )
 from cli.price_history import PriceHistoryLog
 from tradingagents.simulator.activity_messages import (
@@ -154,14 +156,26 @@ def render_paper_live_display(
     display_ctx: Optional[PaperDisplayContext] = None,
     movers_board: Optional[MoversBoard] = None,
 ) -> Group:
-    """Rich live view: activity log, status + market + price history, optional movers overlay."""
+    """Live view: ticks on top, portfolio + market, activity log fills the rest."""
     ctx = display_ctx or PaperDisplayContext()
-    parts = []
-    if log is not None and log.enabled:
-        parts.append(log.render_panel())
+    parts: list = []
+
+    term_w, _term_h = terminal_size()
+    full_width = max(60, term_w - 2)
 
     session_high = price_history.session_high if price_history else None
     session_low = price_history.session_low if price_history else None
+
+    if price_history is not None:
+        parts.append(
+            price_history.render_panel(
+                width=full_width,
+                max_rows=8,
+                compact_summary=True,
+            )
+        )
+
+    w_left, w_right = terminal_column_widths(2)
 
     def _market_panel(width: int) -> Panel:
         return render_market_panel(
@@ -172,44 +186,28 @@ def render_paper_live_display(
             width=width,
         )
 
+    parts.append(
+        Columns(
+            [
+                render_paper_portfolio_panel(state, width=w_left),
+                _market_panel(w_right),
+            ],
+            expand=False,
+            equal=True,
+        )
+    )
+
     if ctx.show_movers and movers_board is not None:
-        w_left, w_right = terminal_column_widths(2)
-        parts.append(
-            Columns(
-                [
-                    render_paper_portfolio_panel(state, width=w_left),
-                    _market_panel(w_right),
-                ],
-                expand=False,
-                equal=True,
-            )
-        )
         parts.append(movers_board.render_panel(active_pair=state.symbol))
-    elif price_history is not None:
-        w_left, w_mid, w_right = terminal_column_widths(3)
+
+    reserved = 14 + 22 + (8 if ctx.show_movers and movers_board is not None else 0)
+    activity_h = activity_panel_height(reserved_lines=reserved)
+    activity_lines = max(6, activity_h - 3)
+    if log is not None and log.enabled:
         parts.append(
-            Columns(
-                [
-                    render_paper_portfolio_panel(state, width=w_left),
-                    _market_panel(w_mid),
-                    price_history.render_panel(width=w_right),
-                ],
-                expand=False,
-                equal=True,
-            )
+            log.render_panel(visible_lines=activity_lines, height=activity_h)
         )
-    else:
-        w_left, w_right = terminal_column_widths(2)
-        parts.append(
-            Columns(
-                [
-                    render_paper_portfolio_panel(state, width=w_left),
-                    _market_panel(w_right),
-                ],
-                expand=False,
-                equal=True,
-            )
-        )
+
     parts.append(_render_footer_controls(ctx))
     return Group(*parts)
 
@@ -594,6 +592,7 @@ def run_paper_session(
     try:
         with cbreak_stdin():
             if use_live_log:
+                console.clear()
                 with Live(
                     console=console,
                     refresh_per_second=4,
