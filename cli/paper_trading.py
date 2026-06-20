@@ -23,7 +23,9 @@ from cli.keyboard_input import cbreak_stdin, poll_stdin_key
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
     PaperDisplayContext,
-    activity_panel_height,
+    ACTIVITY_MAX_STORED_LINES,
+    activity_log_layout,
+    clip_activity_message,
     clip_cell,
     make_kv_table,
     render_market_panel,
@@ -165,13 +167,19 @@ def render_paper_live_display(
     session_high = price_history.session_high if price_history else None
     session_low = price_history.session_low if price_history else None
 
-    movers_reserve = 8 if ctx.show_movers and movers_board is not None else 0
-    reserved = 12 + 22 + 1 + movers_reserve
-    activity_h = activity_panel_height(reserved_lines=reserved)
-    activity_lines = max(6, activity_h - 3)
+    leverage_on = bool(getattr(state, "leverage", 1.0) and getattr(state, "leverage", 1.0) > 1.0)
+    activity_lines, activity_h = activity_log_layout(
+        show_movers=ctx.show_movers and movers_board is not None,
+        leverage_on=leverage_on,
+    )
+    msg_width = max(40, full_width - 12)
     if log is not None and log.enabled:
         parts.append(
-            log.render_panel(visible_lines=activity_lines, height=activity_h)
+            log.render_panel(
+                visible_lines=activity_lines,
+                height=activity_h,
+                max_width=msg_width,
+            )
         )
 
     if price_history is not None:
@@ -390,6 +398,7 @@ def run_paper_session(
 
     log = ActivityLog(
         enabled=True,
+        max_lines=ACTIVITY_MAX_STORED_LINES,
         echo=_echo if not use_live_log else None,
         on_change=_request_display_refresh,
     )

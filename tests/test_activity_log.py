@@ -172,6 +172,19 @@ class TestActivityLog:
         assert "earlier events hidden" in rendered
         assert "line-0" not in rendered
 
+    def test_render_panel_clips_long_messages(self):
+        log = ActivityLog(enabled=True)
+        long_msg = (
+            "Status — Holding long | equity $9,915.63 (-0.84%) | DD 0.84%/4.0% | long"
+        )
+        log.append(long_msg)
+        buffer = StringIO()
+        Console(file=buffer, width=80).print(
+            log.render_panel(visible_lines=5, max_width=50)
+        )
+        rendered = buffer.getvalue()
+        assert "…" in rendered
+
     def test_disabled_log_does_not_store(self):
         log = ActivityLog(enabled=False)
         log.append("hidden")

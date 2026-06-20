@@ -24,10 +24,60 @@ def terminal_size() -> tuple[int, int]:
     return size.columns, size.lines
 
 
+# Activity log: ~11 single-line entries fits a typical laptop terminal above the
+# fixed price-tick + portfolio + market blocks (image showed 30+ wrapped lines).
+ACTIVITY_MAX_VISIBLE_LINES = 11
+ACTIVITY_MAX_STORED_LINES = 35
+ACTIVITY_PANEL_CHROME_LINES = 2
+
+
+def clip_activity_message(message: str, max_width: int) -> str:
+    """Force one terminal row per log entry (no Rich soft-wrap)."""
+    if max_width < 8 or len(message) <= max_width:
+        return message
+    return message[: max_width - 1] + "…"
+
+
+def paper_live_reserved_lines(
+    *,
+    show_movers: bool = False,
+    leverage_on: bool = False,
+) -> int:
+    """Estimate fixed rows below the activity panel."""
+    price_ticks = 12  # header + 8 rows + summary + border
+    paper_rows = 18  # strategy/status block with spike + adaptive rows
+    market_rows = 14 + (6 if leverage_on else 0)  # leverage subsection
+    side_panels = max(paper_rows, market_rows) + 2  # panel title/border
+    footer = 2
+    movers = 8 if show_movers else 0
+    return price_ticks + side_panels + footer + movers
+
+
+def activity_log_layout(
+    *,
+    reserved_lines: Optional[int] = None,
+    leverage_on: bool = False,
+    show_movers: bool = False,
+) -> tuple[int, int]:
+    """Return (visible_entry_count, panel_height_lines)."""
+    reserved = reserved_lines if reserved_lines is not None else paper_live_reserved_lines(
+        show_movers=show_movers,
+        leverage_on=leverage_on,
+    )
+    _, term_h = terminal_size()
+    available = max(6, term_h - reserved)
+    visible = min(
+        ACTIVITY_MAX_VISIBLE_LINES,
+        max(4, available - ACTIVITY_PANEL_CHROME_LINES),
+    )
+    panel_h = visible + ACTIVITY_PANEL_CHROME_LINES
+    return visible, panel_h
+
+
 def activity_panel_height(*, reserved_lines: int = 34) -> int:
     """Lines available for the activity log panel after fixed rows."""
-    _, height = terminal_size()
-    return max(8, height - reserved_lines)
+    _, panel_h = activity_log_layout(reserved_lines=reserved_lines)
+    return panel_h
 
 
 def terminal_column_widths(count: int, *, minimum: int = 28) -> list[int]:

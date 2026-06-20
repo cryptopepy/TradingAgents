@@ -24,8 +24,11 @@ from tradingagents.simulator.activity_messages import (
     format_tick_action,
 )
 
+from cli.paper_display import clip_activity_message
+
 __all__ = [
     "ActivityLog",
+    "clip_activity_message",
     "format_drawdown_rebacktest_banner",
     "format_horizon_complete",
     "format_horizon_skipped",
@@ -83,9 +86,10 @@ class ActivityLog:
         title: str = "Activity",
         visible_lines: Optional[int] = None,
         height: Optional[int] = None,
+        max_width: Optional[int] = None,
     ) -> Panel:
         if visible_lines is None:
-            visible_lines = 20
+            visible_lines = 11
         if not self._lines:
             body = Text("Waiting for events…", style="dim italic")
         else:
@@ -96,8 +100,9 @@ class ActivityLog:
             for idx, (ts, line) in enumerate(tail):
                 if idx or len(self._lines) > visible_lines:
                     body.append("\n")
+                clipped = clip_activity_message(line, max_width) if max_width else line
                 body.append(f"{ts} ", style="dim cyan")
-                body.append(line)
+                body.append(clipped)
         panel_kwargs: dict = {"title": title, "border_style": "blue"}
         if height is not None:
             panel_kwargs["height"] = height
