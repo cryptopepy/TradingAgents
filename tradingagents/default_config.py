@@ -212,8 +212,8 @@ _BASE_CONFIG = {
     "movers_top_coins": "500",
     "movers_cache_ttl_seconds": 300,
     "movers_provider": "kraken",
-    # Optional rotating file log for paper-trading freeze / runtime debugging
-    "file_logging_enabled": False,
+    # Rotating debug log + session/trade journal (both enabled by default)
+    "file_logging_enabled": True,
     "log_file_path": None,
     "log_level": "INFO",
     "log_file_max_bytes": 5_000_000,

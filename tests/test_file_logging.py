@@ -10,9 +10,15 @@ from tradingagents.logging_setup import configure_file_logging, resolve_log_file
 
 
 class TestFileLoggingSetup(unittest.TestCase):
-    def test_disabled_by_default(self):
+    def test_can_be_disabled(self):
         path = configure_file_logging({"file_logging_enabled": False})
         self.assertIsNone(path)
+
+    def test_enabled_by_default_in_config(self):
+        from tradingagents.default_config import DEFAULT_CONFIG
+
+        self.assertTrue(DEFAULT_CONFIG["file_logging_enabled"])
+        self.assertTrue(DEFAULT_CONFIG["paper_journal_enabled"])
 
     def test_writes_to_configured_path(self):
         with self.subTest("enabled"):
