@@ -41,6 +41,7 @@ from tradingagents.simulator.persistence import (
     save_paper_session,
 )
 from tradingagents.logging_setup import PAPER_RUNTIME_LOGGER
+from tradingagents.simulator.paper_journal import journal_trade
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +370,7 @@ class PaperTradingEngine:
         return signal
 
     def _restore_persisted_session(self) -> None:
+        self._resumed_session = False
         if not self.config.get("paper_state_persistence", True):
             return
         if self.config.get("paper_fresh_start"):
@@ -377,6 +379,7 @@ class PaperTradingEngine:
         saved = load_paper_session(self.session.symbol, self.config)
         if not saved:
             return
+        self._resumed_session = True
         self.portfolio = restore_portfolio(saved)
         self.session.strategy_name = saved.get("strategy_name", self.session.strategy_name)
         self.session.lookback = saved.get("lookback", self.session.lookback)
@@ -468,6 +471,7 @@ class PaperTradingEngine:
             result.price,
             lev,
         )
+        journal_trade(message)
         self._emit_activity(message)
 
     def _log_open_position_if_any(self, quote: Optional[LivePrice] = None) -> None:
@@ -479,15 +483,15 @@ class PaperTradingEngine:
         side = "long" if pos["side"] > 0 else "short"
         price = quote.price if quote else float(pos.get("entry_price", 0.0))
         lev = float(pos.get("leverage", self.session.leverage or 1.0))
-        self._emit_activity(
-            format_open_position_line(
-                side=side,
-                price=price,
-                equity=self.portfolio.equity,
-                leverage=lev,
-                entry_price=float(pos.get("entry_price", 0.0)),
-            )
+        message = format_open_position_line(
+            side=side,
+            price=price,
+            equity=self.portfolio.equity,
+            leverage=lev,
+            entry_price=float(pos.get("entry_price", 0.0)),
         )
+        journal_trade(message)
+        self._emit_activity(message)
 
     def _log_backtest_activity(self, message: str) -> None:
         self._emit_activity(message)
@@ -750,14 +754,14 @@ class PaperTradingEngine:
             self.portfolio.mark_to_market({self.session.symbol: quote.price})
             from tradingagents.simulator.activity_messages import format_tick_action
 
-            self._emit_activity(
-                format_tick_action(
-                    "manual_close",
-                    quote.price,
-                    self.portfolio.equity,
-                    leverage=float(self.session.leverage or 1.0),
-                )
+            close_message = format_tick_action(
+                "manual_close",
+                quote.price,
+                self.portfolio.equity,
+                leverage=float(self.session.leverage or 1.0),
             )
+            journal_trade(close_message)
+            self._emit_activity(close_message)
             self._record_equity_samples(self.portfolio.equity, now)
 
             if reoptimize:

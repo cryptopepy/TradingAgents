@@ -52,6 +52,12 @@ from tradingagents.logging_setup import (
     PAPER_RUNTIME_LOGGER,
     configure_file_logging,
 )
+from tradingagents.simulator.paper_journal import (
+    configure_paper_journal,
+    journal_note,
+    journal_session_start,
+    journal_session_stop,
+)
 
 console = Console()
 
@@ -295,6 +301,7 @@ def run_paper_session(
     """Run interactive paper trading with live Rich status updates."""
     cfg = dict(config)
     log_path = configure_file_logging(cfg)
+    journal_path = configure_paper_journal(cfg)
     if log_path is not None:
         PAPER_RUNTIME_LOGGER.info(
             "Paper session starting ticker=%s file_log=%s tty=%s",
@@ -302,6 +309,8 @@ def run_paper_session(
             log_path,
             is_live_display_tty(),
         )
+    if journal_path is not None:
+        PAPER_RUNTIME_LOGGER.info("Paper journal enabled → %s", journal_path)
     adaptive_on = adaptive if adaptive is not None else bool(cfg.get("paper_adaptive_enabled", True))
     use_live_log = is_live_display_tty()
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
@@ -474,6 +483,17 @@ def run_paper_session(
                 tick_interval_seconds=interval,
                 leverage=float(getattr(session, "leverage", cfg.get("paper_leverage", 1.0))),
             )
+        )
+        resumed = bool(getattr(engine, "_resumed_session", False))
+        journal_session_start(
+            symbol=symbol,
+            strategy=session.strategy_name,
+            lookback=str(session.lookback),
+            equity=float(engine.portfolio.equity),
+            leverage=float(getattr(session, "leverage", cfg.get("paper_leverage", 1.0))),
+            adaptive=adaptive_on,
+            tick_interval=interval,
+            resumed=resumed,
         )
 
         if not use_live_log:
@@ -686,6 +706,16 @@ def run_paper_session(
                             f"Switching {current_ticker} → {next_pair} "
                             f"(equity ${equity:,.2f})"
                         )
+                        journal_note(
+                            f"Pair switch {current_ticker} → {next_pair} "
+                            f"(equity ${equity:,.2f})"
+                        )
+                        journal_session_stop(
+                            symbol=current_ticker,
+                            ticks=tick_count,
+                            equity=equity,
+                            reason="pair switch",
+                        )
                         cfg["paper_initial_equity"] = equity
                         cfg["paper_fresh_start"] = True
                         price_history.reset()
@@ -711,6 +741,18 @@ def run_paper_session(
         latest_state.equity if latest_state is not None else 0.0,
         quit_requested,
         stop_requested,
+    )
+    if quit_requested:
+        reason = "quit (q)"
+    elif stop_requested:
+        reason = "stopped"
+    else:
+        reason = "ended"
+    journal_session_stop(
+        symbol=current_ticker,
+        ticks=tick_count,
+        equity=latest_state.equity if latest_state is not None else 0.0,
+        reason=reason,
     )
     if quit_requested:
         console.print("[yellow]Paper trading stopped (q). State saved.[/yellow]")
