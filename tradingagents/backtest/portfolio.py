@@ -125,7 +125,8 @@ class VirtualPortfolio:
         move = (price - pos["entry_price"]) / pos["entry_price"]
         if pos["side"] < 0:
             move = -move
-        return self._position_notional(pos) * move * pos.get("leverage", 1.0)
+        # Notional at entry already includes leverage (deploy × leverage).
+        return self._position_notional(pos) * move
 
     def _close_position(self, asset: str, price: float) -> None:
         pos = self.positions.pop(asset, None)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 from tradingagents.backtest.schemas import StrategyMetrics, WinningStrategySummary
 
@@ -156,12 +156,14 @@ def format_session_config_summary(
     spike_enabled: bool,
     spike_intelligent_tuning: bool,
     tick_interval_seconds: float,
+    leverage: float = 1.0,
 ) -> str:
     tp = (
         f"{take_profit_pct * 100:.1f}%"
         if take_profit_pct is not None
         else f"{stop_loss_pct * 200:.1f}% (2× SL)"
     )
+    lev_part = f"{leverage:g}x leverage" if leverage > 1 else "1x (no leverage)"
     adaptive_part = (
         f"adaptive on ({drawdown_window_minutes:.0f}m / {max_drawdown_pct:.1f}% cap)"
         if adaptive
@@ -173,7 +175,7 @@ def format_session_config_summary(
     else:
         spike_part = "fast-move off"
     return (
-        f"Risk — SL {stop_loss_pct * 100:.1f}% / TP {tp} | "
+        f"Risk — SL {stop_loss_pct * 100:.1f}% / TP {tp} / {lev_part} | "
         f"{adaptive_part} | {spike_part} | tick {tick_interval_seconds:.0f}s"
     )
 
@@ -223,17 +225,35 @@ def format_vendor_failures(attempts: Sequence) -> list[str]:
     return failures
 
 
-def format_tick_action(action: str, price: float, equity: float) -> str:
+def format_tick_action(action: str, price: float, equity: float, *, leverage: float = 1.0) -> str:
+    lev_note = f" · {leverage:g}x" if leverage and leverage > 1.0 else ""
     labels = {
-        "stop_loss_exit": "STOP-LOSS exit",
-        "take_profit_exit": "TAKE-PROFIT exit",
-        "signal_exit": "Signal exit",
-        "enter_long": "Enter LONG",
-        "enter_short": "Enter SHORT",
-        "manual_close": "Close position and retest (c)",
+        "stop_loss_exit": "SELL — stop-loss exit",
+        "take_profit_exit": "SELL — take-profit exit",
+        "signal_exit": "SELL — signal exit",
+        "enter_long": "BUY — enter long",
+        "enter_short": "SHORT — open position",
+        "manual_close": "SELL — close & retest (c)",
     }
     label = labels.get(action, action.replace("_", " ").title())
-    return f"{label} @ ${price:,.4f} — equity ${equity:,.2f}"
+    return f"{label} @ ${price:,.4f}{lev_note} — equity ${equity:,.2f}"
+
+
+def format_open_position_line(
+    *,
+    side: str,
+    price: float,
+    equity: float,
+    leverage: float,
+    entry_price: Optional[float] = None,
+) -> str:
+    entry_bit = f" entry ${entry_price:,.4f}" if entry_price else ""
+    lev_note = f" · {leverage:g}x" if leverage > 1.0 else ""
+    verb = "BUY" if side == "long" else "SHORT"
+    return (
+        f"Open position — {verb} {side}{lev_note}{entry_bit} "
+        f"@ ${price:,.4f} — equity ${equity:,.2f}"
+    )
 
 
 def format_strategy_switch(old: str, new: str, *, reason: str = "drawdown review") -> str:

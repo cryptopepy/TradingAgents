@@ -6,9 +6,15 @@ import shutil
 from dataclasses import dataclass
 from typing import Optional
 
+from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
+from tradingagents.simulator.liquidation import (
+    format_liquidation_cell,
+    leverage_display_tiers,
+)
 from tradingagents.simulator.paper_engine import PaperTradingState
 
 
@@ -84,6 +90,65 @@ def make_kv_table(
     return table, value_w
 
 
+def _centered_divider(label: str, width: int) -> Text:
+    """Horizontal rule with centered label for subsection headers."""
+    inner = max(8, width)
+    title = f" {label} "
+    if len(title) >= inner:
+        return Text(title.strip(), style="dim", justify="center")
+    pad = inner - len(title)
+    left = pad // 2
+    right = pad - left
+    return Text("─" * left + title + "─" * right, style="dim")
+
+
+def _render_leverage_liquidation_block(
+    state: PaperTradingState,
+    *,
+    panel_width: Optional[int] = None,
+) -> Optional[Group]:
+    """Leverage tiers with estimated liquidation prices (market panel only)."""
+    session_lev = getattr(state, "leverage", 1.0) or 1.0
+    if session_lev <= 1.0:
+        return None
+
+    inner = panel_inner_width(panel_width)
+    ref_price = state.position_entry_price or state.price
+    if ref_price <= 0:
+        return None
+
+    side = state.position_side if state.position_side in ("long", "short") else None
+    ref_note = (
+        f"from entry ${state.position_entry_price:,.0f}"
+        if state.position_entry_price
+        else "from spot (if opened now)"
+    )
+
+    lev_table, value_w = make_kv_table(
+        panel_width,
+        header_style="bold yellow",
+        label_header="Lev",
+        value_header="Liq est.",
+    )
+    for lev in leverage_display_tiers(session_lev):
+        lev_table.add_row(
+            f"{lev:g}x",
+            clip_cell(
+                format_liquidation_cell(ref_price, lev, position_side=side),
+                value_w,
+            ),
+        )
+
+    parts: list = [_centered_divider("Leverage", inner), lev_table]
+    if side is None:
+        parts.append(
+            Text(f"↓long / ↑short · {ref_note}", style="dim italic", justify="right")
+        )
+    else:
+        parts.append(Text(ref_note, style="dim italic", justify="right"))
+    return Group(*parts)
+
+
 @dataclass
 class PaperDisplayContext:
     """Live timing metadata for the status row."""
@@ -132,8 +197,13 @@ def render_market_panel(
     if ctx.fee_bps is not None:
         table.add_row("Fee (side)", f"{ctx.fee_bps:.1f} bps")
 
+    body: list = [table]
+    lev_block = _render_leverage_liquidation_block(state, panel_width=width)
+    if lev_block is not None:
+        body.append(lev_block)
+
     return Panel(
-        table,
+        Group(*body),
         title="Market",
         border_style="yellow",
         expand=True,

@@ -121,6 +121,7 @@ class PaperTradingSession(BaseModel):
     take_profit_pct: Optional[float] = None
     slippage_bps: float = 10.0
     position_size_pct: float = 1.0
+    leverage: float = 1.0
     initial_equity: float = 1.0
 
 
@@ -155,8 +156,8 @@ def _position_from_portfolio(
         return None
     side = StrategySignal.LONG if pos["side"] > 0 else StrategySignal.SHORT
     move = _position_move(portfolio, asset, price)
-    notional_base = portfolio.initial_equity * pos.get("sizing_pct", 1.0)
-    upnl = notional_base * move * pos.get("leverage", 1.0)
+    notional = float(pos["size"]) * float(pos["entry_price"])
+    upnl = notional * move
     return AssetPosition(
         asset=asset,
         side=side,
@@ -202,6 +203,7 @@ def evaluate_live_market_tick(
     take_profit_pct: Optional[float] = None,
     slippage_bps: float = 10.0,
     sizing_pct: float = 1.0,
+    leverage: float = 1.0,
 ) -> TickEvaluationResult:
     """Apply one market tick: stop-loss, take-profit, signal entry/exit, fees via matcher."""
     signal = StrategySignal.from_value(winning_strategy_signal)
@@ -261,6 +263,7 @@ def evaluate_live_market_tick(
                     asset=asset,
                     direction=Direction.LONG,
                     sizing_pct=sizing_pct,
+                    leverage=leverage,
                 ),
                 reference_price=price,
             )
@@ -277,6 +280,7 @@ def evaluate_live_market_tick(
                     asset=asset,
                     direction=Direction.SHORT,
                     sizing_pct=sizing_pct,
+                    leverage=leverage,
                 ),
                 reference_price=price,
             )

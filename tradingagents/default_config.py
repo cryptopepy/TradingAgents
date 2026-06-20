@@ -39,6 +39,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PAPER_STATE_ENABLED": "paper_state_persistence",
     "TRADINGAGENTS_PAPER_STOP_LOSS_PCT": "paper_stop_loss_pct",
     "TRADINGAGENTS_PAPER_TAKE_PROFIT_PCT": "paper_take_profit_pct",
+    "TRADINGAGENTS_PAPER_LEVERAGE": "paper_leverage",
     "TRADINGAGENTS_WINNER_GATE_ENABLED": "winner_gate_enabled",
     "TRADINGAGENTS_WINNER_MIN_NET_PROFIT": "winner_min_net_profit",
     "TRADINGAGENTS_WINNER_MIN_TRADES": "winner_min_trades",
@@ -151,6 +152,7 @@ _BASE_CONFIG = {
     "paper_state_persistence": True,
     "paper_stop_loss_pct": 0.02,
     "paper_take_profit_pct": None,
+    "paper_leverage": 1.0,
     # Winner gating for optimize_strategies / auto-deploy
     "winner_gate_enabled": True,
     "winner_min_net_profit": 0.0,

@@ -93,6 +93,7 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "3.0"),
             MagicMock(ask=lambda: "6.0"),
+            MagicMock(ask=lambda: "2"),
             MagicMock(ask=lambda: "30"),
             MagicMock(ask=lambda: "5.0"),
             MagicMock(ask=lambda: "0.5"),
@@ -126,6 +127,7 @@ class TestPaperInteractive:
         assert params.spike_intelligent_tuning is True
         assert params.tick_interval_seconds == 10.0
         assert params.spike_switch_min_net_profit == 0.005
+        assert params.leverage == 2.0
         assert params.drawdown_window_minutes == 30.0
         assert params.max_drawdown_pct == 5.0
 
@@ -208,6 +210,7 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "2.0"),
             MagicMock(ask=lambda: ""),
+            MagicMock(ask=lambda: "1"),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
             MagicMock(ask=lambda: "0.5"),
@@ -253,6 +256,7 @@ class TestPaperInteractive:
             MagicMock(ask=lambda: "10"),
             MagicMock(ask=lambda: "2.0"),
             MagicMock(ask=lambda: ""),
+            MagicMock(ask=lambda: "1"),
             MagicMock(ask=lambda: "60"),
             MagicMock(ask=lambda: "5.0"),
             MagicMock(ask=lambda: "0.5"),

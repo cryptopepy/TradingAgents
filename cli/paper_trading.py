@@ -375,6 +375,7 @@ def run_paper_session(
                 stop_loss_pct=float(cfg.get("paper_stop_loss_pct", 0.02)),
                 take_profit_pct=float(take_profit_raw) if take_profit_raw is not None else None,
                 slippage_bps=paper_fee_bps(symbol, cfg),
+                leverage=float(cfg.get("paper_leverage", 1.0)),
             )
         return _run_initial_backtest(
             symbol,
@@ -420,6 +421,7 @@ def run_paper_session(
                     cfg.get("paper_spike_intelligent_tuning_enabled", False)
                 ),
                 tick_interval_seconds=interval,
+                leverage=float(getattr(session, "leverage", cfg.get("paper_leverage", 1.0))),
             )
         )
 
@@ -649,6 +651,7 @@ def run_paper_session(
 def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     """Interactive paper-trading options (post-analysis deploy flow)."""
     from cli.paper_interactive import (
+        _prompt_leverage,
         _prompt_paper_monitoring_settings,
         _prompt_risk_exit_settings,
         _prompt_tick_interval,
@@ -666,6 +669,7 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
 
     tick_interval = _prompt_tick_interval(config)
     stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(config)
+    leverage = _prompt_leverage(config)
     adaptive, window, threshold, spike = _prompt_paper_monitoring_settings(
         config,
         stop_loss_pct=stop_loss_pct,
@@ -673,6 +677,7 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
     config["paper_tick_interval_seconds"] = tick_interval
     config["paper_stop_loss_pct"] = stop_loss_pct
     config["paper_take_profit_pct"] = take_profit_pct
+    config["paper_leverage"] = leverage
     config["drawdown_time_window_minutes"] = window
     config["paper_loss_review_minutes"] = window
     config["max_allowed_drawdown_pct"] = threshold
@@ -693,5 +698,6 @@ def prompt_paper_options(config: dict, *, ticker: str) -> dict:
         "spike_review": spike.enabled,
         "spike_intelligent_tuning": spike.intelligent_tuning,
         "tick_interval_seconds": tick_interval,
+        "leverage": leverage,
         "ticks": ticks,
     }

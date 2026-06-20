@@ -114,9 +114,15 @@ class TestActivityMessages:
 
     def test_format_tick_action_stop_loss(self):
         line = format_tick_action("stop_loss_exit", 49_500.0, 9_850.0)
-        assert "STOP-LOSS" in line
+        assert "SELL" in line
+        assert "stop-loss" in line
         assert "49,500" in line
         assert "9,850" in line
+
+    def test_format_tick_action_buy_with_leverage(self):
+        line = format_tick_action("enter_long", 50_000.0, 10_200.0, leverage=3.0)
+        assert "BUY" in line
+        assert "3x" in line
 
     def test_append_invokes_on_change(self):
         calls: list[str] = []

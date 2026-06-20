@@ -77,6 +77,9 @@ class PaperTradingState:
     stop_loss_pct: float = 0.02
     take_profit_pct: Optional[float] = None
     open_position: Optional[str] = None
+    position_entry_price: Optional[float] = None
+    position_side: Optional[str] = None
+    leverage: float = 1.0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -105,6 +108,13 @@ class PaperTradingEngine:
         self._pending_last_drawdown_review_at: Optional[datetime] = None
         self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
         self._restore_persisted_session()
+        lev = float(
+            self.session.leverage
+            if getattr(self.session, "leverage", None)
+            else self.config.get("paper_leverage", 1.0)
+        )
+        self.session.leverage = lev
+        self.portfolio.default_leverage = lev
         self.matcher = SimulatedMatcher(slippage_bps=0.0, portfolio=self.portfolio)
         self._dummy_feed: Optional[DummyPriceFeed] = None
         self._tick_history: List[TickEvaluationResult] = []
@@ -162,6 +172,8 @@ class PaperTradingEngine:
         )
         if spike_on:
             self._log_spike_session_start()
+        if self.session.symbol in self.portfolio.positions:
+            self._log_open_position_if_any(self._last_good_quote)
 
     @property
     def tick_history(self) -> List[TickEvaluationResult]:
@@ -405,11 +417,32 @@ class PaperTradingEngine:
             return
         from tradingagents.simulator.activity_messages import format_tick_action
 
+        lev = float(self.session.leverage or 1.0)
         self._emit_activity(
             format_tick_action(
                 result.action_taken,
                 result.price,
                 result.portfolio_equity,
+                leverage=lev,
+            )
+        )
+
+    def _log_open_position_if_any(self, quote: Optional[LivePrice] = None) -> None:
+        if self.session.symbol not in self.portfolio.positions:
+            return
+        from tradingagents.simulator.activity_messages import format_open_position_line
+
+        pos = self.portfolio.positions[self.session.symbol]
+        side = "long" if pos["side"] > 0 else "short"
+        price = quote.price if quote else float(pos.get("entry_price", 0.0))
+        lev = float(pos.get("leverage", self.session.leverage or 1.0))
+        self._emit_activity(
+            format_open_position_line(
+                side=side,
+                price=price,
+                equity=self.portfolio.equity,
+                leverage=lev,
+                entry_price=float(pos.get("entry_price", 0.0)),
             )
         )
 
@@ -467,6 +500,7 @@ class PaperTradingEngine:
                     if self.session.position_size_pct != 1.0
                     else self.config.get("position_size_pct", 1.0)
                 ),
+                leverage=float(self.session.leverage or 1.0),
             )
             self._tick_history.append(result)
             self._log_tick_action(result)
@@ -655,7 +689,12 @@ class PaperTradingEngine:
             from tradingagents.simulator.activity_messages import format_tick_action
 
             self._emit_activity(
-                format_tick_action("manual_close", quote.price, self.portfolio.equity)
+                format_tick_action(
+                    "manual_close",
+                    quote.price,
+                    self.portfolio.equity,
+                    leverage=float(self.session.leverage or 1.0),
+                )
             )
             self._record_equity_samples(self.portfolio.equity, now)
 
@@ -948,9 +987,13 @@ class PaperTradingEngine:
         if quote is None:
             quote = self._quote_for_display(None)
         pos_desc = None
+        pos_entry: Optional[float] = None
+        pos_side: Optional[str] = None
         if self.session.symbol in self.portfolio.positions:
             pos = self.portfolio.positions[self.session.symbol]
             pos_desc = "long" if pos["side"] > 0 else "short"
+            pos_entry = float(pos["entry_price"])
+            pos_side = pos_desc
         pnl = self.portfolio.equity - self.portfolio.initial_equity
         pnl_pct = (pnl / self.portfolio.initial_equity * 100.0) if self.portfolio.initial_equity else 0.0
         now = quote.timestamp
@@ -998,7 +1041,10 @@ class PaperTradingEngine:
             ),
             stop_loss_pct=float(self.session.stop_loss_pct),
             take_profit_pct=take_profit,
+            leverage=float(self.session.leverage or 1.0),
             open_position=pos_desc,
+            position_entry_price=pos_entry,
+            position_side=pos_side,
         )
 
     def run_loop(
@@ -1100,4 +1146,5 @@ def session_from_optimization(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         slippage_bps=slippage_bps,
+        leverage=float(cfg.get("paper_leverage", 1.0)),
     )

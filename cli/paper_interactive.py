@@ -50,6 +50,7 @@ class PaperRunParams:
     live_mode: bool
     stop_loss_pct: float
     take_profit_pct: Optional[float]
+    leverage: float
     adaptive_enabled: bool
     spike_review_enabled: bool
     spike_intelligent_tuning: bool
@@ -372,6 +373,28 @@ def _prompt_risk_exit_settings(config: dict) -> tuple[float, Optional[float]]:
     return stop_loss_pct, take_profit_pct
 
 
+def _default_leverage(config: dict) -> float:
+    return float(config.get("paper_leverage", 1.0))
+
+
+def _prompt_leverage(config: dict) -> float:
+    default = _default_leverage(config)
+    default_str = str(int(default) if default == int(default) else default)
+    raw = questionary.text(
+        "Leverage multiplier (1 = none, 2 or 3 = margin; PnL scales with leverage):",
+        default=default_str,
+    ).ask()
+    if raw is None:
+        raise BacktestValidationError("Paper trading cancelled.")
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BacktestValidationError(
+            f"Leverage must be a number, got {raw!r}"
+        ) from exc
+    return validate_positive_float(value, name="Leverage", minimum=1.0)
+
+
 def _prompt_adaptive_settings(config: dict) -> tuple[bool, float, float]:
     adaptive = questionary.confirm(
         "Enable adaptive strategy re-optimization on sustained drawdown?",
@@ -572,6 +595,7 @@ def prompt_paper_params(
     resolved_ticks = validate_ticks(ticks) if ticks is not None else _prompt_ticks()
     tick_interval = _prompt_tick_interval(cfg)
     stop_loss_pct, take_profit_pct = _prompt_risk_exit_settings(cfg)
+    leverage = _prompt_leverage(cfg)
 
     if live_mode:
         resolved_live = True
@@ -599,6 +623,7 @@ def prompt_paper_params(
         live_mode=resolved_live,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        leverage=leverage,
         adaptive_enabled=adaptive,
         spike_review_enabled=spike.enabled,
         spike_intelligent_tuning=spike.intelligent_tuning,
@@ -712,6 +737,7 @@ def resolve_paper_params(
         live_mode=live_mode,
         stop_loss_pct=_default_stop_loss_pct(cfg),
         take_profit_pct=_default_take_profit_pct(cfg),
+        leverage=_default_leverage(cfg),
         adaptive_enabled=resolved_adaptive,
         spike_review_enabled=resolved_spike,
         spike_intelligent_tuning=resolved_spike_tuning,
@@ -750,6 +776,7 @@ def apply_paper_params_to_config(params: PaperRunParams, config: dict | None = N
     cfg["paper_loss_threshold_pct"] = params.max_drawdown_pct
     cfg["paper_stop_loss_pct"] = params.stop_loss_pct
     cfg["paper_take_profit_pct"] = params.take_profit_pct
+    cfg["paper_leverage"] = params.leverage
     if params.live_mode:
         cfg["live_mode"] = True
     cfg["paper_fresh_start"] = params.fresh_start

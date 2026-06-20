@@ -268,6 +268,24 @@ class TestPortfolio:
         assert snap.equity == portfolio.equity
         assert len(snap.positions) == 1
 
+    def test_virtual_portfolio_leverage_scales_pnl(self):
+        portfolio = VirtualPortfolio(initial_equity=10_000.0)
+        ts = datetime(2025, 1, 1, 12, 0)
+        portfolio.apply_intent(
+            TransactionIntent(
+                timestamp=ts,
+                asset="BTC/USDT",
+                direction=Direction.LONG,
+                leverage=2.0,
+                sizing_pct=1.0,
+            ),
+            fill_price=50_000.0,
+        )
+        portfolio.mark_to_market({"BTC/USDT": 55_000.0})
+        # 10% move × 2x leverage ≈ 20% on equity (fees reduce slightly)
+        assert portfolio.equity > 11_900.0
+        assert portfolio.equity < 12_100.0
+
     def test_simulated_matcher_applies_slippage(self):
         matcher = SimulatedMatcher(slippage_bps=10.0)
         intent = TransactionIntent(
