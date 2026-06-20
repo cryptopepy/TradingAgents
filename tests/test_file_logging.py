@@ -6,7 +6,7 @@ import logging
 import unittest
 from pathlib import Path
 
-from tradingagents.logging_setup import configure_file_logging, resolve_log_file_path
+from tradingagents.logging_setup import configure_file_logging, resolve_log_file_path, resolve_paper_logs_dir
 
 
 class TestFileLoggingSetup(unittest.TestCase):
@@ -38,11 +38,12 @@ class TestFileLoggingSetup(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             self.assertIn("test runtime line", content)
 
-    def test_default_path_under_results_dir(self):
-        cfg = {"results_dir": "/tmp/tradingagents-test-logs"}
+    def test_default_path_under_paper_logs_dir(self):
+        cfg = {"paper_logs_dir": "logs"}
+        log_dir = resolve_paper_logs_dir(cfg)
         path = resolve_log_file_path(cfg)
         self.assertEqual(path.name, "paper_trading.log")
-        self.assertIn("tradingagents-test-logs", str(path))
+        self.assertEqual(path.parent, log_dir.resolve())
 
 
 if __name__ == "__main__":

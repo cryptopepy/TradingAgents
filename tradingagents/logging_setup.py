@@ -18,16 +18,22 @@ PAPER_RUNTIME_LOGGER = logging.getLogger("tradingagents.paper.runtime")
 PAPER_DISPLAY_LOGGER = logging.getLogger("tradingagents.paper.display")
 
 
+def resolve_paper_logs_dir(config: Optional[dict] = None) -> Path:
+    """Directory for paper trading log files (default ``./logs``)."""
+    cfg = config or get_config()
+    explicit = cfg.get("paper_logs_dir") or os.getenv("TRADINGAGENTS_PAPER_LOGS_DIR")
+    if explicit:
+        return Path(os.path.expanduser(str(explicit))).resolve()
+    return Path("logs").resolve()
+
+
 def resolve_log_file_path(config: Optional[dict] = None) -> Path:
-    """Return the on-disk log path (explicit or default under results_dir)."""
+    """Return the on-disk debug log path (explicit or ``logs/paper_trading.log``)."""
     cfg = config or get_config()
     explicit = cfg.get("log_file_path") or os.getenv("TRADINGAGENTS_LOG_FILE")
     if explicit:
         return Path(os.path.expanduser(str(explicit))).resolve()
-    results = cfg.get("results_dir") or os.path.join(
-        os.path.expanduser("~"), ".tradingagents", "logs"
-    )
-    return Path(results).expanduser().resolve() / "paper_trading.log"
+    return resolve_paper_logs_dir(cfg) / "paper_trading.log"
 
 
 def configure_file_logging(config: Optional[dict] = None) -> Optional[Path]:

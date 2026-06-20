@@ -9,21 +9,19 @@ from pathlib import Path
 from typing import Optional
 
 from tradingagents.dataflows.config import get_config
+from tradingagents.logging_setup import resolve_paper_logs_dir
 
 _LOCK = threading.Lock()
 _ACTIVE: Optional["PaperJournal"] = None
 
 
 def resolve_paper_journal_path(config: Optional[dict] = None) -> Path:
-    """Default journal path under ``results_dir``."""
+    """Default journal path under ``./logs``."""
     cfg = config or get_config()
     explicit = cfg.get("paper_journal_path") or os.getenv("TRADINGAGENTS_PAPER_JOURNAL_FILE")
     if explicit:
         return Path(os.path.expanduser(str(explicit))).resolve()
-    results = cfg.get("results_dir") or os.path.join(
-        os.path.expanduser("~"), ".tradingagents", "logs"
-    )
-    return Path(results).expanduser().resolve() / "paper_journal.log"
+    return resolve_paper_logs_dir(cfg) / "paper_journal.log"
 
 
 class PaperJournal:

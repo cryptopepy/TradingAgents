@@ -40,7 +40,7 @@ from tradingagents.simulator.persistence import (
     restore_portfolio,
     save_paper_session,
 )
-from tradingagents.logging_setup import PAPER_RUNTIME_LOGGER
+from tradingagents.logging_setup import PAPER_RUNTIME_LOGGER, resolve_paper_logs_dir
 from tradingagents.simulator.paper_journal import journal_trade
 
 logger = logging.getLogger(__name__)
@@ -502,16 +502,14 @@ class PaperTradingEngine:
         message = format_strategy_switch(old_name, new_name)
         logger.warning("[AUTONOMOUS ROTATION]: %s", message)
         self._emit_activity(message)
-        log_dir = self.config.get("results_dir")
-        if log_dir:
-            from pathlib import Path
+        from pathlib import Path
 
-            path = Path(log_dir) / "paper_rotation.log"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(
-                    f"{datetime.now(timezone.utc).isoformat()} [AUTONOMOUS ROTATION] {message}\n"
-                )
+        path = resolve_paper_logs_dir(self.config) / "paper_rotation.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"{datetime.now(timezone.utc).isoformat()} [AUTONOMOUS ROTATION] {message}\n"
+            )
 
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""

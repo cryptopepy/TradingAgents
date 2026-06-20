@@ -80,6 +80,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_LOG_LEVEL": "log_level",
     "TRADINGAGENTS_PAPER_JOURNAL_ENABLED": "paper_journal_enabled",
     "TRADINGAGENTS_PAPER_JOURNAL_FILE": "paper_journal_path",
+    "TRADINGAGENTS_PAPER_LOGS_DIR": "paper_logs_dir",
     "TRADINGAGENTS_PAPER_ACTIVITY_VISIBLE_LINES": "paper_activity_visible_lines",
     "TRADINGAGENTS_PAPER_ACTIVITY_MAX_LINES": "paper_activity_max_lines",
 }
@@ -220,6 +221,8 @@ _BASE_CONFIG = {
     "log_level": "INFO",
     "log_file_max_bytes": 5_000_000,
     "log_file_backup_count": 3,
+    # Paper log directory (./logs by default — paper_trading.log, paper_journal.log, …)
+    "paper_logs_dir": "logs",
     # Session start/stop and trade journal (enabled by default)
     "paper_journal_enabled": True,
     "paper_journal_path": None,
