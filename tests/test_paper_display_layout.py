@@ -6,7 +6,6 @@ import unittest
 from unittest.mock import patch
 
 from cli.paper_display import (
-    ACTIVITY_MAX_VISIBLE_LINES,
     activity_log_layout,
     clip_activity_message,
     paper_live_reserved_lines,
@@ -26,16 +25,20 @@ class TestPaperDisplayLayout(unittest.TestCase):
         self.assertGreater(with_lev, base)
 
     @patch("cli.paper_display.terminal_size", return_value=(120, 40))
-    def test_activity_capped_on_tall_terminal(self, _size):
-        visible, panel_h = activity_log_layout()
-        self.assertLessEqual(visible, ACTIVITY_MAX_VISIBLE_LINES)
+    def test_activity_capped_by_config(self, _size):
+        visible, panel_h = activity_log_layout(
+            config={"paper_activity_visible_lines": 11},
+        )
+        self.assertLessEqual(visible, 11)
         self.assertEqual(panel_h, visible + 2)
 
     @patch("cli.paper_display.terminal_size", return_value=(120, 24))
     def test_activity_shrinks_on_short_terminal(self, _size):
-        visible, _panel_h = activity_log_layout()
+        visible, _panel_h = activity_log_layout(
+            config={"paper_activity_visible_lines": 11},
+        )
         self.assertGreaterEqual(visible, 4)
-        self.assertLess(visible, ACTIVITY_MAX_VISIBLE_LINES)
+        self.assertLess(visible, 11)
 
 
 if __name__ == "__main__":

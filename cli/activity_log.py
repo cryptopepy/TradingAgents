@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable, Iterable, Optional
 
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from tradingagents.simulator.activity_messages import (
@@ -23,8 +24,6 @@ from tradingagents.simulator.activity_messages import (
     format_strategy_switch,
     format_tick_action,
 )
-
-from cli.paper_display import clip_activity_message
 
 __all__ = [
     "ActivityLog",
@@ -45,18 +44,39 @@ __all__ = [
 ]
 
 
+def clip_activity_message(message: str, max_width: int) -> str:
+    """Force one terminal row per log entry (no Rich soft-wrap)."""
+    if max_width < 8 or len(message) <= max_width:
+        return message
+    return message[: max_width - 1] + "…"
+
+
 def is_live_display_tty() -> bool:
     """True when stdout is a TTY and live Rich panels are safe."""
     return sys.stdout.isatty()
 
 
+def _scrollbar_thumb_row(visible_lines: int, *, start: int, total: int) -> list[int]:
+    """Row indices (0-based) that should show the thumb block."""
+    if total <= visible_lines or visible_lines <= 0:
+        return []
+    max_start = total - visible_lines
+    thumb_h = max(1, round(visible_lines * visible_lines / total))
+    thumb_h = min(thumb_h, visible_lines)
+    if max_start <= 0:
+        return list(range(thumb_h))
+    thumb_top = round((start / max_start) * (visible_lines - thumb_h))
+    thumb_top = max(0, min(thumb_top, visible_lines - thumb_h))
+    return list(range(thumb_top, thumb_top + thumb_h))
+
+
 class ActivityLog:
-    """Timestamped, capped append-only log for Rich live displays."""
+    """Timestamped log with scrollable viewport for Rich live displays."""
 
     def __init__(
         self,
         *,
-        max_lines: int = 75,
+        max_lines: int = 200,
         enabled: bool = True,
         echo: Optional[Callable[[str], None]] = None,
         on_change: Optional[Callable[[], None]] = None,
@@ -65,12 +85,16 @@ class ActivityLog:
         self.enabled = enabled
         self._echo = echo
         self._on_change = on_change
+        self._scroll_offset = 0  # lines up from the bottom (0 = newest)
+        self._follow_tail = True
 
     def append(self, message: str) -> None:
         if not self.enabled or not message:
             return
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._lines.append((timestamp, message))
+        if self._follow_tail:
+            self._scroll_offset = 0
         if self._echo is not None:
             self._echo(message)
         if self._on_change is not None:
@@ -79,6 +103,44 @@ class ActivityLog:
     def extend(self, messages: Iterable[str]) -> None:
         for message in messages:
             self.append(message)
+
+    @property
+    def line_count(self) -> int:
+        return len(self._lines)
+
+    @property
+    def scroll_offset(self) -> int:
+        return self._scroll_offset
+
+    @property
+    def following_tail(self) -> bool:
+        return self._follow_tail
+
+    def scroll_up(self, lines: int = 1) -> None:
+        """Scroll toward older messages."""
+        if not self._lines:
+            return
+        self._follow_tail = False
+        max_offset = max(0, len(self._lines) - 1)
+        self._scroll_offset = min(self._scroll_offset + max(1, lines), max_offset)
+
+    def scroll_down(self, lines: int = 1) -> None:
+        """Scroll toward newer messages."""
+        self._scroll_offset = max(0, self._scroll_offset - max(1, lines))
+        if self._scroll_offset == 0:
+            self._follow_tail = True
+
+    def scroll_to_bottom(self) -> None:
+        self._scroll_offset = 0
+        self._follow_tail = True
+
+    def _visible_window(self, visible_lines: int) -> tuple[list[tuple[str, str]], int]:
+        total = len(self._lines)
+        if total == 0:
+            return [], 0
+        end = total - self._scroll_offset
+        start = max(0, end - visible_lines)
+        return list(self._lines)[start:end], start
 
     def render_panel(
         self,
@@ -90,27 +152,55 @@ class ActivityLog:
     ) -> Panel:
         if visible_lines is None:
             visible_lines = 11
+        text_width = max(20, (max_width or 72) - 2)
+        window, start = self._visible_window(visible_lines)
+        total = len(self._lines)
+        thumb_rows = _scrollbar_thumb_row(
+            visible_lines, start=start, total=total
+        )
+        scrollable = total > visible_lines
+
         if not self._lines:
-            body = Text("Waiting for events…", style="dim italic")
+            body: Table | Text = Text("Waiting for events…", style="dim italic")
         else:
-            tail = list(self._lines)[-visible_lines:]
-            body = Text()
-            if len(self._lines) > visible_lines:
-                body.append("… earlier events hidden", style="dim italic")
-            for idx, (ts, line) in enumerate(tail):
-                if idx or len(self._lines) > visible_lines:
-                    body.append("\n")
-                clipped = clip_activity_message(line, max_width) if max_width else line
-                body.append(f"{ts} ", style="dim cyan")
-                body.append(clipped)
-        panel_kwargs: dict = {"title": title, "border_style": "blue"}
+            table = Table(
+                show_header=False,
+                box=None,
+                pad_edge=False,
+                expand=True,
+                show_edge=False,
+            )
+            table.add_column("log", ratio=1, no_wrap=True, overflow="ellipsis")
+            table.add_column("bar", width=1, justify="center", no_wrap=True)
+
+            for row_idx in range(visible_lines):
+                data_idx = row_idx - (visible_lines - len(window))
+                if 0 <= data_idx < len(window):
+                    ts, line = window[data_idx]
+                    clipped = clip_activity_message(line, text_width)
+                    log_cell = Text()
+                    log_cell.append(f"{ts} ", style="dim cyan")
+                    log_cell.append(clipped)
+                else:
+                    log_cell = Text("")
+                if scrollable:
+                    if row_idx in thumb_rows:
+                        bar_cell = Text("█", style="cyan")
+                    else:
+                        bar_cell = Text("│", style="dim")
+                else:
+                    bar_cell = Text(" ", style="dim")
+                table.add_row(log_cell, bar_cell)
+            body = table
+
+        panel_title = title
+        if self._scroll_offset > 0:
+            panel_title = f"{title} ↑{self._scroll_offset}"
+
+        panel_kwargs: dict = {"title": panel_title, "border_style": "blue"}
         if height is not None:
             panel_kwargs["height"] = height
         return Panel(body, **panel_kwargs)
-
-    @property
-    def line_count(self) -> int:
-        return len(self._lines)
 
 
 def make_progress_logger(progress) -> ActivityLog:

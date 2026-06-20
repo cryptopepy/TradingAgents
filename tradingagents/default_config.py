@@ -80,6 +80,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_LOG_LEVEL": "log_level",
     "TRADINGAGENTS_PAPER_JOURNAL_ENABLED": "paper_journal_enabled",
     "TRADINGAGENTS_PAPER_JOURNAL_FILE": "paper_journal_path",
+    "TRADINGAGENTS_PAPER_ACTIVITY_VISIBLE_LINES": "paper_activity_visible_lines",
+    "TRADINGAGENTS_PAPER_ACTIVITY_MAX_LINES": "paper_activity_max_lines",
 }
 
 
@@ -221,6 +223,8 @@ _BASE_CONFIG = {
     # Session start/stop and trade journal (enabled by default)
     "paper_journal_enabled": True,
     "paper_journal_path": None,
+    "paper_activity_visible_lines": 11,
+    "paper_activity_max_lines": 200,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

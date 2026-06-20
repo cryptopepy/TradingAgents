@@ -19,13 +19,17 @@ from cli.activity_log import (
     is_live_display_tty,
     make_backtest_callbacks,
 )
-from cli.keyboard_input import cbreak_stdin, poll_stdin_key
+from cli.keyboard_input import (
+    SCROLL_BOTTOM,
+    SCROLL_DOWN,
+    SCROLL_UP,
+    cbreak_stdin,
+    poll_stdin_event,
+)
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
     PaperDisplayContext,
-    ACTIVITY_MAX_STORED_LINES,
     activity_log_layout,
-    clip_activity_message,
     clip_cell,
     make_kv_table,
     render_market_panel,
@@ -64,7 +68,7 @@ from tradingagents.simulator.paper_journal import (
 console = Console()
 
 PAPER_CONTROLS_TEXT = (
-    "(m) movers · (c) close & retest · (r) reanalyze · (q) quit"
+    "(↑↓ scroll log · m) movers · (c) close & retest · (r) reanalyze · (q) quit"
 )
 MOVERS_CONTROLS_TEXT = (
     "(1–9) switch pair · (s) refresh · (m/esc) close movers"
@@ -172,7 +176,7 @@ def render_paper_live_display(
         show_movers=ctx.show_movers and movers_board is not None,
         leverage_on=leverage_on,
     )
-    msg_width = max(40, full_width - 12)
+    msg_width = max(40, full_width - 14)  # room for scrollbar column
     if log is not None and log.enabled:
         parts.append(
             log.render_panel(
@@ -398,7 +402,7 @@ def run_paper_session(
 
     log = ActivityLog(
         enabled=True,
-        max_lines=ACTIVITY_MAX_STORED_LINES,
+        max_lines=int(cfg.get("paper_activity_max_lines", 200)),
         echo=_echo if not use_live_log else None,
         on_change=_request_display_refresh,
     )
@@ -583,7 +587,20 @@ def run_paper_session(
 
         def _poll_key(timeout: float) -> Optional[str]:
             _flush_display_refresh()
-            key = poll_stdin_key(timeout)
+            event = poll_stdin_event(timeout)
+            if event == SCROLL_UP:
+                log.scroll_up()
+                _refresh_display()
+                return None
+            if event == SCROLL_DOWN:
+                log.scroll_down()
+                _refresh_display()
+                return None
+            if event == SCROLL_BOTTOM:
+                log.scroll_to_bottom()
+                _refresh_display()
+                return None
+            key = event
             if confirm_state["action"]:
                 if key == "y":
                     pending = confirm_state["action"]

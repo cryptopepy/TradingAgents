@@ -169,8 +169,31 @@ class TestActivityLog:
         rendered = buffer.getvalue()
         assert "line-24" in rendered
         assert "line-20" in rendered
-        assert "earlier events hidden" in rendered
         assert "line-0" not in rendered
+
+    def test_scroll_up_reveals_older_lines(self):
+        log = ActivityLog(max_lines=50, enabled=True)
+        for i in range(20):
+            log.append(f"line-{i}")
+        log.scroll_up(3)
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(log.render_panel(visible_lines=5))
+        rendered = buffer.getvalue()
+        assert "line-16" in rendered
+        assert "line-24" not in rendered
+
+    def test_scrolled_up_stays_pinned_until_bottom(self):
+        log = ActivityLog(max_lines=50, enabled=True)
+        for i in range(10):
+            log.append(f"line-{i}")
+        log.scroll_up(5)
+        log.append("line-new")
+        assert not log.following_tail
+        log.scroll_to_bottom()
+        assert log.following_tail
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(log.render_panel(visible_lines=5))
+        assert "line-new" in buffer.getvalue()
 
     def test_render_panel_clips_long_messages(self):
         log = ActivityLog(enabled=True)

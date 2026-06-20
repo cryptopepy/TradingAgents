@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from tradingagents.dataflows.config import get_config
 from tradingagents.simulator.liquidation import (
     format_liquidation_cell,
     leverage_display_tiers,
@@ -24,18 +25,15 @@ def terminal_size() -> tuple[int, int]:
     return size.columns, size.lines
 
 
-# Activity log: ~11 single-line entries fits a typical laptop terminal above the
-# fixed price-tick + portfolio + market blocks (image showed 30+ wrapped lines).
-ACTIVITY_MAX_VISIBLE_LINES = 11
-ACTIVITY_MAX_STORED_LINES = 35
+# Defaults; override via paper_activity_visible_lines / paper_activity_max_lines.
 ACTIVITY_PANEL_CHROME_LINES = 2
 
 
 def clip_activity_message(message: str, max_width: int) -> str:
-    """Force one terminal row per log entry (no Rich soft-wrap)."""
-    if max_width < 8 or len(message) <= max_width:
-        return message
-    return message[: max_width - 1] + "…"
+    """Re-export for layout helpers (implementation lives in activity_log)."""
+    from cli.activity_log import clip_activity_message as _clip
+
+    return _clip(message, max_width)
 
 
 def paper_live_reserved_lines(
@@ -58,8 +56,11 @@ def activity_log_layout(
     reserved_lines: Optional[int] = None,
     leverage_on: bool = False,
     show_movers: bool = False,
+    config: Optional[dict] = None,
 ) -> tuple[int, int]:
     """Return (visible_entry_count, panel_height_lines)."""
+    cfg = config or get_config()
+    visible_cap = int(cfg.get("paper_activity_visible_lines", 11))
     reserved = reserved_lines if reserved_lines is not None else paper_live_reserved_lines(
         show_movers=show_movers,
         leverage_on=leverage_on,
@@ -67,7 +68,7 @@ def activity_log_layout(
     _, term_h = terminal_size()
     available = max(6, term_h - reserved)
     visible = min(
-        ACTIVITY_MAX_VISIBLE_LINES,
+        visible_cap,
         max(4, available - ACTIVITY_PANEL_CHROME_LINES),
     )
     panel_h = visible + ACTIVITY_PANEL_CHROME_LINES

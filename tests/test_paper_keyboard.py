@@ -49,7 +49,7 @@ class TestPaperControlsDisplay:
         Console(file=buffer, width=120).print(render_paper_live_display(state))
         rendered = buffer.getvalue()
         assert PAPER_CONTROLS_TEXT in rendered
-        assert "(m) movers" in rendered
+        assert "movers" in rendered
         assert "(c)" in rendered
         assert "(r)" in rendered
         assert "(q)" in rendered
