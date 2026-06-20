@@ -40,6 +40,7 @@ from tradingagents.simulator.persistence import (
     restore_portfolio,
     save_paper_session,
 )
+from tradingagents.logging_setup import PAPER_RUNTIME_LOGGER
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,15 @@ class PaperTradingEngine:
             self._log_spike_session_start()
         if self.session.symbol in self.portfolio.positions:
             self._log_open_position_if_any(self._last_good_quote)
+        PAPER_RUNTIME_LOGGER.info(
+            "Engine ready symbol=%s strategy=%s equity=$%.2f cash=$%.2f positions=%d leverage=%gx",
+            self.session.symbol,
+            self.session.strategy_name,
+            self.portfolio.equity,
+            self.portfolio.cash,
+            len(self.portfolio.positions),
+            float(self.session.leverage or 1.0),
+        )
 
     @property
     def tick_history(self) -> List[TickEvaluationResult]:
@@ -185,6 +195,7 @@ class PaperTradingEngine:
 
     def _fetch_price(self) -> Optional[LivePrice]:
         """Return a live quote, or None when all vendors failed (no mock trading)."""
+        started = time.monotonic()
         delays = DEFAULT_API_RETRY_DELAYS
 
         def _attempt() -> LivePrice:
@@ -194,6 +205,12 @@ class PaperTradingEngine:
             return quote
 
         def _on_retry(attempt: int, wait: float, exc: Exception) -> None:
+            PAPER_RUNTIME_LOGGER.warning(
+                "Price API retry %d in %.0fs (%s)",
+                attempt,
+                wait,
+                exc,
+            )
             self._emit_activity(
                 f"Price API error — retry {attempt} in {wait:.0f}s ({exc})"
             )
@@ -204,12 +221,32 @@ class PaperTradingEngine:
             on_retry=_on_retry,
             label=f"live price ({self.session.symbol})",
         )
+        elapsed = time.monotonic() - started
         if quote is None:
             self._feed_unavailable = True
+            PAPER_RUNTIME_LOGGER.warning(
+                "Price fetch failed after %.2fs symbol=%s",
+                elapsed,
+                self.session.symbol,
+            )
             self._log_feed_unavailable()
             return None
         self._feed_unavailable = False
         self._last_good_quote = quote
+        if elapsed >= 10.0:
+            PAPER_RUNTIME_LOGGER.warning(
+                "Slow price fetch %.2fs source=%s price=$%.4f",
+                elapsed,
+                quote.source.value,
+                quote.price,
+            )
+        else:
+            PAPER_RUNTIME_LOGGER.debug(
+                "Price fetch %.2fs source=%s price=$%.4f",
+                elapsed,
+                quote.source.value,
+                quote.price,
+            )
         return quote
 
     def _log_feed_unavailable(self, *, force: bool = False) -> None:
@@ -418,14 +455,20 @@ class PaperTradingEngine:
         from tradingagents.simulator.activity_messages import format_tick_action
 
         lev = float(self.session.leverage or 1.0)
-        self._emit_activity(
-            format_tick_action(
-                result.action_taken,
-                result.price,
-                result.portfolio_equity,
-                leverage=lev,
-            )
+        message = format_tick_action(
+            result.action_taken,
+            result.price,
+            result.portfolio_equity,
+            leverage=lev,
         )
+        PAPER_RUNTIME_LOGGER.info(
+            "Trade action=%s equity=$%.2f price=$%.4f leverage=%gx",
+            result.action_taken,
+            result.portfolio_equity,
+            result.price,
+            lev,
+        )
+        self._emit_activity(message)
 
     def _log_open_position_if_any(self, quote: Optional[LivePrice] = None) -> None:
         if self.session.symbol not in self.portfolio.positions:
@@ -469,9 +512,27 @@ class PaperTradingEngine:
     def tick(self) -> TickEvaluationResult:
         """Execute one paper-trading tick: price fetch, signal refresh, fill."""
         if not self._operation_lock.acquire(blocking=False):
+            PAPER_RUNTIME_LOGGER.debug("Tick skipped — background operation in progress")
             return self._tick_busy_skipped()
+        started = time.monotonic()
         try:
-            return self._tick_locked()
+            result = self._tick_locked()
+            elapsed = time.monotonic() - started
+            if elapsed >= 30.0:
+                PAPER_RUNTIME_LOGGER.warning(
+                    "Slow tick %.1fs action=%s equity=$%.2f",
+                    elapsed,
+                    result.action_taken,
+                    result.portfolio_equity,
+                )
+            elif elapsed >= 5.0:
+                PAPER_RUNTIME_LOGGER.info(
+                    "Tick took %.1fs action=%s equity=$%.2f",
+                    elapsed,
+                    result.action_taken,
+                    result.portfolio_equity,
+                )
+            return result
         finally:
             self._operation_lock.release()
 
@@ -663,6 +724,7 @@ class PaperTradingEngine:
 
     def close_open_position(self, *, reoptimize: bool = True) -> bool:
         """Close the open position at the current mark price and optionally re-optimize."""
+        PAPER_RUNTIME_LOGGER.info("Close position requested reoptimize=%s", reoptimize)
         with self._operation_lock:
             if self.session.symbol not in self.portfolio.positions:
                 self._emit_activity("Close & retest skipped — no open position")
@@ -705,10 +767,16 @@ class PaperTradingEngine:
             self._persist_session(quote)
             if self.on_state_change:
                 self.on_state_change(state)
+            PAPER_RUNTIME_LOGGER.info(
+                "Close position complete equity=$%.2f reoptimize=%s",
+                self.portfolio.equity,
+                reoptimize,
+            )
             return True
 
     def reanalyze(self) -> None:
         """Re-run strategy optimization without closing the open position."""
+        PAPER_RUNTIME_LOGGER.info("Reanalyze requested")
         with self._operation_lock:
             quote = self._fetch_price() or self._last_good_quote
             now = datetime.now(timezone.utc)
@@ -728,6 +796,11 @@ class PaperTradingEngine:
             self._persist_session(quote)
             if self.on_state_change:
                 self.on_state_change(state)
+            PAPER_RUNTIME_LOGGER.info(
+                "Reanalyze complete strategy=%s equity=$%.2f",
+                self.session.strategy_name,
+                self.portfolio.equity,
+            )
 
     def _run_manual_rebacktest(self, now: datetime) -> None:
         """Re-run optimization after a manual close (not an adaptive drawdown review)."""
@@ -1058,12 +1131,19 @@ class PaperTradingEngine:
         """Blocking poll loop until ``max_ticks`` or stop requested."""
         interval = interval_seconds or float(self.config.get("paper_tick_interval_seconds", 10.0))
         ticks = 0
+        PAPER_RUNTIME_LOGGER.info(
+            "Run loop started symbol=%s interval=%.1fs adaptive=%s",
+            self.session.symbol,
+            interval,
+            self.adaptive_enabled,
+        )
         try:
             while not self._stop_event.is_set():
                 try:
                     result = self.tick()
                 except Exception as exc:
                     logger.exception("Paper tick crashed — continuing: %s", exc)
+                    PAPER_RUNTIME_LOGGER.exception("Tick crashed — continuing next interval")
                     self._emit_activity(f"Tick crashed — continuing next interval ({exc})")
                     result = None
                 if result is not None and on_tick:
@@ -1082,6 +1162,12 @@ class PaperTradingEngine:
                     self.reanalyze()
         except KeyboardInterrupt:
             self._stop_event.set()
+        PAPER_RUNTIME_LOGGER.info(
+            "Run loop stopped symbol=%s ticks=%d equity=$%.2f",
+            self.session.symbol,
+            ticks,
+            self.portfolio.equity,
+        )
 
     def start_background(
         self,

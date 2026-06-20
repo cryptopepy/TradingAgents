@@ -47,6 +47,11 @@ from tradingagents.backtest import (
 from tradingagents.simulator import PaperTradingEngine, PaperTradingState, session_from_optimization
 from tradingagents.dataflows.kraken import kraken_status_summary
 from tradingagents.dataflows.trading_fees import paper_fee_bps, paper_transaction_cost_pct
+from tradingagents.logging_setup import (
+    PAPER_DISPLAY_LOGGER,
+    PAPER_RUNTIME_LOGGER,
+    configure_file_logging,
+)
 
 console = Console()
 
@@ -289,6 +294,14 @@ def run_paper_session(
 ) -> None:
     """Run interactive paper trading with live Rich status updates."""
     cfg = dict(config)
+    log_path = configure_file_logging(cfg)
+    if log_path is not None:
+        PAPER_RUNTIME_LOGGER.info(
+            "Paper session starting ticker=%s file_log=%s tty=%s",
+            ticker,
+            log_path,
+            is_live_display_tty(),
+        )
     adaptive_on = adaptive if adaptive is not None else bool(cfg.get("paper_adaptive_enabled", True))
     use_live_log = is_live_display_tty()
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
@@ -315,7 +328,8 @@ def run_paper_session(
         loop_clock["next_tick_at"] = time.monotonic() + interval
         display_ctx.seconds_until_next = interval
 
-    display_pending: dict = {"refresh": False, "state": None}
+    display_pending: dict = {"refresh": False, "state": None, "requested_at": 0.0}
+    last_flushed_equity: dict = {"value": None}
 
     def _refresh_display(state: Optional[PaperTradingState] = None) -> None:
         target = state or latest_state
@@ -323,14 +337,31 @@ def run_paper_session(
             remaining = loop_clock["next_tick_at"] - time.monotonic()
             display_ctx.seconds_until_next = max(0.0, remaining)
             display_ctx.fee_bps = paper_fee_bps(target.symbol, cfg)
-            live.update(
-                render_paper_live_display(
-                    target, log, price_history, display_ctx, movers_board
+            try:
+                live.update(
+                    render_paper_live_display(
+                        target, log, price_history, display_ctx, movers_board
+                    )
                 )
-            )
+                if last_flushed_equity["value"] != target.equity:
+                    PAPER_DISPLAY_LOGGER.info(
+                        "Display updated equity=$%.2f price=$%.4f signal=%s position=%s",
+                        target.equity,
+                        target.price,
+                        target.signal,
+                        target.open_position or "flat",
+                    )
+                    last_flushed_equity["value"] = target.equity
+            except Exception as exc:
+                PAPER_DISPLAY_LOGGER.exception(
+                    "Display refresh failed equity=$%.2f: %s",
+                    target.equity,
+                    exc,
+                )
 
     def _request_display_refresh(state: Optional[PaperTradingState] = None) -> None:
         display_pending["refresh"] = True
+        display_pending["requested_at"] = time.monotonic()
         if state is not None:
             display_pending["state"] = state
 
@@ -338,8 +369,14 @@ def run_paper_session(
         if not display_pending["refresh"]:
             return
         state = display_pending["state"]
+        pending_for = time.monotonic() - display_pending["requested_at"]
         display_pending["refresh"] = False
         display_pending["state"] = None
+        if pending_for > 5.0:
+            PAPER_DISPLAY_LOGGER.warning(
+                "Display refresh delayed %.1fs before flush",
+                pending_for,
+            )
         _refresh_display(state)
 
     log = ActivityLog(
@@ -389,7 +426,21 @@ def run_paper_session(
 
         engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
         engine_ref["engine"] = engine
-        engine.on_activity = log.append
+
+        def _on_activity(message: str) -> None:
+            log.append(message)
+            if not message:
+                return
+            upper = message.upper()
+            lowered = message.lower()
+            if any(token in upper for token in ("BUY", "SELL", "SHORT", "OPEN POSITION")):
+                PAPER_RUNTIME_LOGGER.info("Activity: %s", message)
+            elif any(token in lowered for token in ("failed", "error", "crashed", "unavailable")):
+                PAPER_RUNTIME_LOGGER.warning("Activity: %s", message)
+            else:
+                PAPER_RUNTIME_LOGGER.debug("Activity: %s", message)
+
+        engine.on_activity = _on_activity
 
         def _on_switch(old: str, new: str) -> None:
             log.append(f"Strategy switch (adaptive): {old} → {new}")
@@ -441,6 +492,11 @@ def run_paper_session(
             nonlocal latest_state
             latest_state = state
             _record_price(state)
+            PAPER_RUNTIME_LOGGER.debug(
+                "State change equity=$%.2f price=$%.4f action_pending_refresh",
+                state.equity,
+                state.price,
+            )
             _request_display_refresh(state)
 
         engine.on_state_change = _on_state
@@ -450,6 +506,14 @@ def run_paper_session(
             tick_count += 1
             loop_clock["next_tick_at"] = time.monotonic() + interval
             display_ctx.seconds_until_next = interval
+            PAPER_RUNTIME_LOGGER.info(
+                "Tick #%d action=%s equity=$%.2f price=$%.4f signal=%s",
+                tick_count,
+                _result.action_taken,
+                _result.portfolio_equity,
+                _result.price,
+                _result.signal.value,
+            )
             _flush_display_refresh()
 
         confirm_state: dict = {"action": None}  # "close" | "reanalyze"
@@ -641,6 +705,13 @@ def run_paper_session(
                 latest_state, log, price_history, display_ctx, movers_board
             )
         )
+    PAPER_RUNTIME_LOGGER.info(
+        "Paper session ended ticks=%d final_equity=$%.2f quit=%s stop=%s",
+        tick_count,
+        latest_state.equity if latest_state is not None else 0.0,
+        quit_requested,
+        stop_requested,
+    )
     if quit_requested:
         console.print("[yellow]Paper trading stopped (q). State saved.[/yellow]")
     elif stop_requested:

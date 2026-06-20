@@ -58,7 +58,14 @@ def save_paper_session(
         "extra": extra or {},
     }
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    logger.debug("Saved paper session to %s", path)
+    logger.info(
+        "Saved paper session %s equity=$%.2f cash=$%.2f positions=%d → %s",
+        symbol,
+        portfolio.equity,
+        portfolio.cash,
+        len(portfolio.positions),
+        path,
+    )
     return path
 
 
@@ -68,7 +75,15 @@ def load_paper_session(symbol: str, config: Optional[dict] = None) -> Optional[d
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        logger.info(
+            "Loaded paper session %s equity=$%.2f saved_at=%s → %s",
+            symbol,
+            float(data.get("equity", 0)),
+            data.get("saved_at", "?"),
+            path,
+        )
+        return data
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to load paper session %s: %s", path, exc)
         return None

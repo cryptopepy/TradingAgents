@@ -75,6 +75,9 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MOVERS_MIN_VOLUME_USD": "movers_min_volume_usd",
     "TRADINGAGENTS_MOVERS_CACHE_TTL_SECONDS": "movers_cache_ttl_seconds",
     "TRADINGAGENTS_MOVERS_PROVIDER": "movers_provider",
+    "TRADINGAGENTS_FILE_LOGGING_ENABLED": "file_logging_enabled",
+    "TRADINGAGENTS_LOG_FILE": "log_file_path",
+    "TRADINGAGENTS_LOG_LEVEL": "log_level",
 }
 
 
@@ -207,6 +210,12 @@ _BASE_CONFIG = {
     "movers_top_coins": "500",
     "movers_cache_ttl_seconds": 300,
     "movers_provider": "kraken",
+    # Optional rotating file log for paper-trading freeze / runtime debugging
+    "file_logging_enabled": False,
+    "log_file_path": None,
+    "log_level": "INFO",
+    "log_file_max_bytes": 5_000_000,
+    "log_file_backup_count": 3,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,
