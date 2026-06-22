@@ -22,10 +22,13 @@ from cli.activity_log import (
 from cli.keyboard_input import (
     SCROLL_BOTTOM,
     SCROLL_DOWN,
+    SCROLL_LEFT,
+    SCROLL_RIGHT,
     SCROLL_UP,
     cbreak_stdin,
     poll_stdin_event,
 )
+from cli.tui.settings import SettingsContext, SettingsOverlay, register_paper_settings
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
     PaperDisplayContext,
@@ -68,10 +71,10 @@ from tradingagents.simulator.paper_journal import (
 console = Console()
 
 PAPER_CONTROLS_TEXT = (
-    "(↑↓ scroll log · m) movers · (c) close & retest · (r) reanalyze · (q) quit"
+    "(↑↓ scroll log · s) settings · (m) movers · (c) close & retest · (r) reanalyze · (q) quit"
 )
 MOVERS_CONTROLS_TEXT = (
-    "(1–9) switch pair · (s) refresh · (m/esc) close movers"
+    "(1–9) switch pair · (f) refresh · (m/esc) close movers"
 )
 
 
@@ -163,10 +166,17 @@ def render_paper_live_display(
 ) -> Group:
     """Live view: activity on top, ticks in the middle, portfolio + market, footer."""
     ctx = display_ctx or PaperDisplayContext()
-    parts: list = []
-
     term_w, _term_h = terminal_size()
     full_width = max(60, term_w - 2)
+
+    settings = getattr(ctx, "settings", None)
+    if settings is not None and getattr(settings, "is_open", False):
+        return Group(
+            settings.render_panel(width=full_width),
+            _render_footer_controls(ctx),
+        )
+
+    parts: list = []
 
     session_high = price_history.session_high if price_history else None
     session_low = price_history.session_low if price_history else None
@@ -229,6 +239,9 @@ def _render_footer_controls(ctx: PaperDisplayContext) -> Text:
         return Text(f"⏳ {ctx.busy_label} — please wait", style="bold cyan")
     if ctx.status_prompt:
         return Text(ctx.status_prompt, style="bold yellow")
+    settings = getattr(ctx, "settings", None)
+    if settings is not None and getattr(settings, "is_open", False):
+        return Text(settings.footer_hint(), style="dim")
     controls = MOVERS_CONTROLS_TEXT if ctx.show_movers else PAPER_CONTROLS_TEXT
     return Text(controls, style="dim")
 
@@ -327,6 +340,7 @@ def run_paper_session(
     use_live_log = is_live_display_tty()
     interval = float(cfg.get("paper_tick_interval_seconds", 10.0))
     current_ticker = ticker
+    register_paper_settings()
     movers_board = MoversBoard(cfg)
 
     def _echo(message: str) -> None:
@@ -341,6 +355,12 @@ def run_paper_session(
         tick_interval=interval,
         kraken_status=kraken_status_summary(),
     )
+    settings_overlay = SettingsOverlay(
+        mode="paper",
+        ctx=SettingsContext(config=cfg, extras={}),
+        title="Settings — Paper Trading",
+    )
+    display_ctx.settings = settings_overlay
     loop_clock: dict = {"next_tick_at": time.monotonic() + interval}
 
     def _record_price(state: PaperTradingState) -> None:
@@ -448,6 +468,13 @@ def run_paper_session(
 
         engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
         engine_ref["engine"] = engine
+        settings_overlay.ctx.extras.update(
+            {
+                "engine": engine,
+                "display_ctx": display_ctx,
+                "activity_log": log,
+            }
+        )
 
         def _on_activity(message: str) -> None:
             log.append(message)
@@ -588,6 +615,10 @@ def run_paper_session(
         def _poll_key(timeout: float) -> Optional[str]:
             _flush_display_refresh()
             event = poll_stdin_event(timeout)
+            if settings_overlay.is_open:
+                settings_overlay.handle_key(event)
+                _refresh_display()
+                return None
             if event == SCROLL_UP:
                 log.scroll_up()
                 _refresh_display()
@@ -599,6 +630,8 @@ def run_paper_session(
             if event == SCROLL_BOTTOM:
                 log.scroll_to_bottom()
                 _refresh_display()
+                return None
+            if event in (SCROLL_LEFT, SCROLL_RIGHT):
                 return None
             key = event
             if confirm_state["action"]:
@@ -643,10 +676,16 @@ def run_paper_session(
                         display_ctx.show_movers = False
                         engine.stop()
                     return None
-                if key == "s":
+                if key == "f":
                     movers_board.refresh(log.append, force=True)
                     _refresh_display()
                     return None
+            if key == "s" and not display_ctx.show_movers:
+                if not action_state["running"] and confirm_state["action"] is None:
+                    settings_overlay.open()
+                    log.append("Settings opened — esc to close")
+                    _refresh_display()
+                return None
             if key == "c":
                 if action_state["running"]:
                     log.append(f"Busy with {action_state['label']} — please wait")

@@ -1154,6 +1154,12 @@ class PaperTradingEngine:
                     ticks += 1
                 if max_ticks is not None and ticks >= max_ticks:
                     break
+                interval = float(
+                    self.config.get(
+                        "paper_tick_interval_seconds",
+                        interval_seconds or 10.0,
+                    )
+                )
                 key = _sleep_until_stopped_or_key(self._stop_event, interval, poll_key)
                 if key == "q":
                     self._stop_event.set()

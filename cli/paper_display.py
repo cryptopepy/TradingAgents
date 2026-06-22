@@ -211,6 +211,7 @@ class PaperDisplayContext:
     show_movers: bool = False
     status_prompt: Optional[str] = None
     busy_label: Optional[str] = None
+    settings: Optional[object] = None  # SettingsOverlay when open
 
 
 def render_market_panel(

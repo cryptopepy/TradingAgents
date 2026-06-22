@@ -116,6 +116,11 @@ class ActivityLog:
     def following_tail(self) -> bool:
         return self._follow_tail
 
+    def set_max_lines(self, max_lines: int) -> None:
+        """Resize stored history (visible viewport unchanged)."""
+        cap = max(10, int(max_lines))
+        self._lines = deque(self._lines, maxlen=cap)
+
     def scroll_up(self, lines: int = 1) -> None:
         """Scroll toward older messages."""
         if not self._lines:

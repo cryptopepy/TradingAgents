@@ -11,6 +11,8 @@ from typing import Iterator, Optional
 # Returned by ``poll_stdin_event`` for scroll gestures (arrows / wheel).
 SCROLL_UP = "__scroll_up__"
 SCROLL_DOWN = "__scroll_down__"
+SCROLL_LEFT = "__scroll_left__"
+SCROLL_RIGHT = "__scroll_right__"
 SCROLL_BOTTOM = "__scroll_bottom__"
 
 
@@ -111,6 +113,10 @@ def _parse_escape(timeout: float = 0.02) -> str:
         return SCROLL_UP
     if rest in ("[B", "OB"):
         return SCROLL_DOWN
+    if rest in ("[D", "OD"):
+        return SCROLL_LEFT
+    if rest in ("[C", "OC"):
+        return SCROLL_RIGHT
     if rest in ("[F", "OF"):
         return SCROLL_BOTTOM
     if rest == "[62~":
@@ -135,6 +141,6 @@ def poll_stdin_event(timeout: float) -> Optional[str]:
 def poll_stdin_key(timeout: float) -> Optional[str]:
     """Return a single pressed key within ``timeout`` seconds, or ``None``."""
     event = poll_stdin_event(timeout)
-    if event in (SCROLL_UP, SCROLL_DOWN, SCROLL_BOTTOM):
+    if event in (SCROLL_UP, SCROLL_DOWN, SCROLL_BOTTOM, SCROLL_LEFT, SCROLL_RIGHT):
         return event
     return event
