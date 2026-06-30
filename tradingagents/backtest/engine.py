@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -387,6 +387,64 @@ def fetch_historical_crypto(
     return df
 
 
+def fetch_ohlcv_range(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    granularity_seconds: int,
+    *,
+    force_refresh: bool = False,
+    config: Optional[dict] = None,
+    on_fetch: Optional[Callable[[str, int, bool], None]] = None,
+    on_provider_attempt: Optional[Callable[[str, int, bool, str], None]] = None,
+    min_bars: int = 30,
+) -> pd.DataFrame:
+    """Load OHLCV for an explicit datetime range via SQLite cache + vendor chain."""
+    from .ohlcv_store import get_store
+
+    cfg = config or get_config()
+    store = get_store(cfg)
+    provider: dict[str, str | int] = {"name": "unknown", "bars": 0}
+
+    def _record_provider(name: str, bars: int) -> None:
+        provider["name"] = name
+        provider["bars"] = bars
+
+    def _do_fetch() -> tuple[pd.DataFrame, str]:
+        df = fetch_intraday_ohlcv(
+            symbol,
+            start_dt,
+            end_dt,
+            granularity_seconds,
+            live_mode=is_live_mode(cfg),
+            config=cfg,
+            on_provider=_record_provider,
+            on_provider_attempt=on_provider_attempt,
+            min_bars=min_bars,
+        )
+        normalized = _normalize_historic_df(df)
+        if normalized.empty:
+            raise BacktestDataError(
+                f"No OHLCV bars returned for {symbol} "
+                f"({start_dt:%Y-%m-%d %H:%M} → {end_dt:%Y-%m-%d %H:%M})."
+            )
+        return normalized, str(provider["name"])
+
+    df, source = store.get_or_fetch(
+        symbol,
+        start_dt,
+        end_dt,
+        granularity_seconds,
+        _do_fetch,
+        force_refresh=force_refresh,
+    )
+    if on_fetch is not None:
+        on_fetch(source, len(df), source == "sqlite cache")
+    if on_provider_attempt is not None and source == "sqlite cache":
+        on_provider_attempt("sqlite cache", len(df), True, f"{len(df)} bars (cache)")
+    return df
+
+
 def fetch_historical_price_slice(
     symbol: str,
     end_date: str,
@@ -479,6 +537,8 @@ def _record_exit_trade(
     exit_price: float,
     transaction_cost_pct: float,
     exit_reason: str,
+    *,
+    on_trade: Optional[Callable[[TradeRecord, Literal["exit"]], None]] = None,
 ) -> None:
     move = (exit_price - entry_price) / entry_price
     if position < 0:
@@ -487,17 +547,18 @@ def _record_exit_trade(
         net = move - 2 * transaction_cost_pct
     else:
         net = move - 2 * transaction_cost_pct
-    trades.append(
-        TradeRecord(
-            entry_date=dates[entry_idx],
-            exit_date=dates[exit_idx],
-            side="long" if position > 0 else "short",
-            entry_price=entry_price,
-            exit_price=exit_price,
-            pnl_pct=net * 100,
-            exit_reason=exit_reason,
-        )
+    record = TradeRecord(
+        entry_date=dates[entry_idx],
+        exit_date=dates[exit_idx],
+        side="long" if position > 0 else "short",
+        entry_price=entry_price,
+        exit_price=exit_price,
+        pnl_pct=net * 100,
+        exit_reason=exit_reason,
     )
+    trades.append(record)
+    if on_trade is not None:
+        on_trade(record, "exit")
 
 
 def run_strategy_on_frame(
@@ -510,6 +571,11 @@ def run_strategy_on_frame(
     transaction_cost_pct: float = 0.001,
     config: Optional[dict] = None,
     risk_variant: Optional[RiskVariant] = None,
+    leverage: float = 1.0,
+    on_bar: Optional[Callable[[int, str, float, float], None]] = None,
+    on_trade: Optional[Callable[[TradeRecord, Literal["exit"]], None]] = None,
+    on_entry: Optional[Callable[[str, str, float], None]] = None,
+    bar_sample_stride: int = 1,
 ) -> BacktestResult:
     """Simulate a strategy on a prepared OHLCV frame via VirtualPortfolio."""
     end_date = ""
@@ -543,9 +609,10 @@ def run_strategy_on_frame(
         cfg,
     )
     sizing_pct = resolve_position_sizing_pct(df, cfg)
-    intents = signals_to_intents(df, symbol, signals, sizing_pct=sizing_pct)
+    intents = signals_to_intents(df, symbol, signals, sizing_pct=sizing_pct, leverage=leverage)
     intent_by_bar = _index_intents_by_bar(df, intents)
     dates = df["Date"].dt.strftime("%Y-%m-%d %H:%M").tolist()
+    stride = max(1, int(bar_sample_stride))
 
     matcher = SimulatedMatcher(
         slippage_bps=0.0,
@@ -588,6 +655,7 @@ def run_strategy_on_frame(
                     price,
                     transaction_cost_pct,
                     "stop_loss",
+                    on_trade=on_trade,
                 )
                 position = 0
                 matcher.mark_to_market({symbol: price})
@@ -595,6 +663,8 @@ def run_strategy_on_frame(
                     (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
                 )
                 equity_points.append(matcher.portfolio.equity)
+                if on_bar is not None and i % stride == 0:
+                    on_bar(i, dates[i], price, matcher.portfolio.equity)
                 continue
             if move > 0 and move >= active_tp_pct:
                 _submit_exit(matcher, symbol, ts, price)
@@ -608,6 +678,7 @@ def run_strategy_on_frame(
                     price,
                     transaction_cost_pct,
                     "take_profit",
+                    on_trade=on_trade,
                 )
                 position = 0
                 matcher.mark_to_market({symbol: price})
@@ -615,6 +686,8 @@ def run_strategy_on_frame(
                     (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
                 )
                 equity_points.append(matcher.portfolio.equity)
+                if on_bar is not None and i % stride == 0:
+                    on_bar(i, dates[i], price, matcher.portfolio.equity)
                 continue
 
         for j, intent in enumerate(bar_intents):
@@ -631,6 +704,7 @@ def run_strategy_on_frame(
                     price,
                     transaction_cost_pct,
                     "signal_flip" if flip else "signal_exit",
+                    on_trade=on_trade,
                 )
                 position = 0
             elif intent.direction == Direction.LONG:
@@ -642,6 +716,8 @@ def run_strategy_on_frame(
                 )
                 effective_stops.append(active_sl_pct)
                 effective_tps.append(active_tp_pct)
+                if on_entry is not None:
+                    on_entry(dates[i], "long", price)
             elif intent.direction == Direction.SHORT:
                 position = -1
                 entry_price = price
@@ -651,6 +727,8 @@ def run_strategy_on_frame(
                 )
                 effective_stops.append(active_sl_pct)
                 effective_tps.append(active_tp_pct)
+                if on_entry is not None:
+                    on_entry(dates[i], "short", price)
             matcher.submit_intent(intent, reference_price=price)
 
         matcher.mark_to_market({symbol: price})
@@ -658,6 +736,8 @@ def run_strategy_on_frame(
             (matcher.portfolio.equity - prev_equity) / prev_equity if prev_equity else 0.0
         )
         equity_points.append(matcher.portfolio.equity)
+        if on_bar is not None and i % stride == 0:
+            on_bar(i, dates[i], price, matcher.portfolio.equity)
 
     if position != 0:
         price = float(close.iloc[-1])
@@ -673,6 +753,7 @@ def run_strategy_on_frame(
             price,
             transaction_cost_pct,
             "end_of_window",
+            on_trade=on_trade,
         )
 
     equity = matcher.portfolio.equity

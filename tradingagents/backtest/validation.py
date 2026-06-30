@@ -46,6 +46,24 @@ def validate_end_date(end_date: str) -> str:
     return parsed.strftime("%Y-%m-%d")
 
 
+def validate_datetime_utc(value: str, *, name: str = "datetime") -> dt.datetime:
+    """Parse ``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM`` as naive UTC wall clock."""
+    text = str(value).strip()
+    if not text:
+        raise BacktestValidationError(f"{name} is required.")
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            parsed = dt.datetime.strptime(text, fmt)
+            if fmt == "%Y-%m-%d":
+                parsed = parsed.replace(hour=0, minute=0)
+            return parsed
+        except ValueError:
+            continue
+    raise BacktestValidationError(
+        f"Invalid {name} {value!r}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM."
+    )
+
+
 def validate_positive_float(
     value: float,
     *,

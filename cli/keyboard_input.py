@@ -15,6 +15,29 @@ SCROLL_LEFT = "__scroll_left__"
 SCROLL_RIGHT = "__scroll_right__"
 SCROLL_BOTTOM = "__scroll_bottom__"
 
+# Ctrl+1 … Ctrl+9 workspace pane switches (\x01 … \x09).
+PANE_1 = "__pane_1__"
+PANE_2 = "__pane_2__"
+PANE_3 = "__pane_3__"
+PANE_4 = "__pane_4__"
+PANE_5 = "__pane_5__"
+PANE_6 = "__pane_6__"
+PANE_7 = "__pane_7__"
+PANE_8 = "__pane_8__"
+PANE_9 = "__pane_9__"
+
+_PANE_BY_CTRL: dict[str, str] = {
+    "\x01": PANE_1,
+    "\x02": PANE_2,
+    "\x03": PANE_3,
+    "\x04": PANE_4,
+    "\x05": PANE_5,
+    "\x06": PANE_6,
+    "\x07": PANE_7,
+    "\x08": PANE_8,
+    "\x09": PANE_9,
+}
+
 
 @contextmanager
 def cbreak_stdin() -> Iterator[None]:
@@ -131,6 +154,9 @@ def poll_stdin_event(timeout: float) -> Optional[str]:
     ch = _read_stdin_chunk(timeout)
     if ch is None:
         return None
+    pane = _PANE_BY_CTRL.get(ch)
+    if pane is not None:
+        return pane
     if ch == "\x1b":
         return _parse_escape()
     if ch.isalpha():

@@ -83,6 +83,9 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PAPER_LOGS_DIR": "paper_logs_dir",
     "TRADINGAGENTS_PAPER_ACTIVITY_VISIBLE_LINES": "paper_activity_visible_lines",
     "TRADINGAGENTS_PAPER_ACTIVITY_MAX_LINES": "paper_activity_max_lines",
+    "TRADINGAGENTS_OHLCV_CACHE_DIR": "ohlcv_cache_dir",
+    "TRADINGAGENTS_VISUAL_BACKTEST_PRICE_SAMPLE_LINES": "visual_backtest_price_sample_lines",
+    "TRADINGAGENTS_VISUAL_BACKTEST_UI_HZ": "visual_backtest_ui_hz",
 }
 
 
@@ -228,6 +231,10 @@ _BASE_CONFIG = {
     "paper_journal_path": None,
     "paper_activity_visible_lines": 11,
     "paper_activity_max_lines": 200,
+    # Visual backtest pane (Ctrl+2) — SQLite OHLCV cache and UI
+    "ohlcv_cache_dir": None,
+    "visual_backtest_price_sample_lines": 12,
+    "visual_backtest_ui_hz": 8,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

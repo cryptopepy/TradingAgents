@@ -29,7 +29,10 @@ from cli.keyboard_input import (
     cbreak_stdin,
     poll_stdin_event,
 )
+from cli.tui.panes.paper_pane import PaperPane
+from cli.tui.panes.visual_backtest_pane import VisualBacktestPane
 from cli.tui.settings import SettingsContext, SettingsOverlay, register_paper_settings
+from cli.tui.workspace import WorkspaceManager
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
     PaperDisplayContext,
@@ -373,20 +376,26 @@ def run_paper_session(
 
     display_pending: dict = {"refresh": False, "state": None, "requested_at": 0.0}
     last_flushed_equity: dict = {"value": None}
+    workspace = None
+    visual_pane = None
 
     def _refresh_display(state: Optional[PaperTradingState] = None) -> None:
         target = state or latest_state
-        if target is not None and live is not None:
+        if live is not None:
             remaining = loop_clock["next_tick_at"] - time.monotonic()
-            display_ctx.seconds_until_next = max(0.0, remaining)
-            display_ctx.fee_bps = paper_fee_bps(target.symbol, cfg)
+            if workspace is not None and workspace.active_pane_id == 1 and target is not None:
+                display_ctx.seconds_until_next = max(0.0, remaining)
+                display_ctx.fee_bps = paper_fee_bps(target.symbol, cfg)
             try:
-                live.update(
-                    render_paper_live_display(
-                        target, log, price_history, display_ctx, movers_board
+                if workspace is not None:
+                    live.update(workspace.render())
+                elif target is not None:
+                    live.update(
+                        render_paper_live_display(
+                            target, log, price_history, display_ctx, movers_board
+                        )
                     )
-                )
-                if last_flushed_equity["value"] != target.equity:
+                if target is not None and last_flushed_equity["value"] != target.equity:
                     PAPER_DISPLAY_LOGGER.info(
                         "Display updated equity=$%.2f price=$%.4f signal=%s position=%s",
                         target.equity,
@@ -398,7 +407,7 @@ def run_paper_session(
             except Exception as exc:
                 PAPER_DISPLAY_LOGGER.exception(
                     "Display refresh failed equity=$%.2f: %s",
-                    target.equity,
+                    target.equity if target is not None else 0.0,
                     exc,
                 )
 
@@ -426,6 +435,11 @@ def run_paper_session(
         enabled=True,
         max_lines=int(cfg.get("paper_activity_max_lines", 200)),
         echo=_echo if not use_live_log else None,
+        on_change=_request_display_refresh,
+    )
+    visual_log = ActivityLog(
+        enabled=True,
+        max_lines=int(cfg.get("paper_activity_max_lines", 200)),
         on_change=_request_display_refresh,
     )
 
@@ -616,6 +630,13 @@ def run_paper_session(
         def _poll_key(timeout: float) -> Optional[str]:
             _flush_display_refresh()
             event = poll_stdin_event(timeout)
+            if workspace is not None and workspace.handle_pane_key(event):
+                _refresh_display()
+                return None
+            if workspace is not None and workspace.active_pane_id != 1:
+                workspace.active_pane.handle_key(event)
+                _refresh_display()
+                return None
             if settings_overlay.is_open:
                 settings_overlay.handle_key(event)
                 _refresh_display()
@@ -750,6 +771,45 @@ def run_paper_session(
                     transient=False,
                 ) as live_ctx:
                     live = live_ctx
+
+                    def _poll_key_simple(timeout: float) -> Optional[str]:
+                        return poll_stdin_event(timeout)
+
+                    def _run_visual_setup():
+                        live.stop()
+                        try:
+                            from cli.tui.visual_backtest.setup import (
+                                prompt_visual_backtest_params,
+                            )
+
+                            return prompt_visual_backtest_params(cfg)
+                        except Exception as exc:
+                            visual_log.append(f"Setup error: {exc}")
+                            return None
+                        finally:
+                            live.start()
+
+                    visual_pane = VisualBacktestPane(
+                        cfg,
+                        visual_log,
+                        run_setup=_run_visual_setup,
+                        on_refresh=lambda: _refresh_display(),
+                        poll_key=_poll_key_simple,
+                    )
+                    paper_pane = PaperPane(
+                        render_fn=render_paper_live_display,
+                        handle_key_fn=lambda _e: None,
+                        get_state=lambda: latest_state,
+                        log=log,
+                        price_history=price_history,
+                        display_ctx=display_ctx,
+                        movers_board=movers_board,
+                    )
+                    workspace = WorkspaceManager(
+                        {1: paper_pane, 2: visual_pane},
+                        on_switch=lambda _o, _n: _refresh_display(),
+                    )
+
                     while not stop_requested:
                         switch_requested["pair"] = None
                         latest_state = _bootstrap_paper_state(current_ticker, cfg)

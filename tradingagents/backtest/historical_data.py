@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _GRANULARITY_5M = 300
 _GRANULARITY_15M = 900
 _GRANULARITY_1H = 3600
+_GRANULARITY_1D = 86400
 
 # ccxt interval string → candle length in milliseconds
 _INTERVAL_MS: dict[str, int] = {
@@ -28,6 +29,7 @@ _INTERVAL_MS: dict[str, int] = {
     "5m": 300_000,
     "15m": 900_000,
     "1h": 3_600_000,
+    "1d": 86_400_000,
 }
 
 
@@ -47,7 +49,39 @@ _VENDOR_SPECS: dict[int, tuple[str, str, str | None]] = {
     _GRANULARITY_5M: ("5m", "histominute", "5min"),
     _GRANULARITY_15M: ("15m", "histominute", "15min"),
     _GRANULARITY_1H: ("1h", "histohour", None),
+    _GRANULARITY_1D: ("1d", "histoday", None),
 }
+
+_GRANULARITY_LABELS: dict[int, str] = {
+    _GRANULARITY_5M: "5m",
+    _GRANULARITY_15M: "15m",
+    _GRANULARITY_1H: "1h",
+    _GRANULARITY_1D: "1d",
+}
+
+_LABEL_TO_SECONDS: dict[str, int] = {v: k for k, v in _GRANULARITY_LABELS.items()}
+
+
+def granularity_seconds_to_label(granularity_seconds: int) -> str:
+    """Map granularity seconds to a display label (e.g. 3600 → ``1h``)."""
+    label = _GRANULARITY_LABELS.get(granularity_seconds)
+    if label is None:
+        raise BacktestDataError(
+            f"Unsupported candle granularity {granularity_seconds}s for backtest OHLCV."
+        )
+    return label
+
+
+def granularity_label_to_seconds(label: str) -> int:
+    """Map bar-size label to granularity seconds."""
+    key = label.strip().lower()
+    seconds = _LABEL_TO_SECONDS.get(key)
+    if seconds is None:
+        supported = ", ".join(sorted(_LABEL_TO_SECONDS))
+        raise BacktestDataError(
+            f"Unsupported bar size {label!r}. Supported: {supported}"
+        )
+    return seconds
 
 
 def _quote_symbol(symbol: str) -> tuple[str, str]:

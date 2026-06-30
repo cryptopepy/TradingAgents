@@ -110,11 +110,10 @@ class PaperTradingEngine:
         self._pending_last_drawdown_review_at: Optional[datetime] = None
         self.portfolio = VirtualPortfolio(initial_equity=equity, fee_bps=fee_bps)
         self._restore_persisted_session()
-        lev = float(
-            self.session.leverage
-            if getattr(self.session, "leverage", None)
-            else self.config.get("paper_leverage", 1.0)
-        )
+        if "paper_leverage" in self.config:
+            lev = float(self.config["paper_leverage"])
+        else:
+            lev = float(self.session.leverage or 1.0)
         self.session.leverage = lev
         self.portfolio.default_leverage = lev
         self.matcher = SimulatedMatcher(slippage_bps=0.0, portfolio=self.portfolio)
