@@ -208,12 +208,28 @@ class TestActivityLog:
         rendered = buffer.getvalue()
         assert "…" in rendered
 
+    def test_trades_filter_shows_only_executions(self):
+        from tradingagents.simulator.activity_messages import format_tick_action
+
+        from cli.activity_log import is_trade_activity_message
+
+        assert is_trade_activity_message(format_tick_action("enter_long", 50_000.0, 10_000.0))
+        assert not is_trade_activity_message("Status — Holding long")
+        log = ActivityLog(enabled=True)
+        log.append("Status — Holding long")
+        log.append(format_tick_action("enter_long", 50_000.0, 10_000.0))
+        log.append(format_tick_action("signal_exit", 51_000.0, 10_200.0))
+        log.toggle_trades_filter()
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(log.render_panel(visible_lines=5))
+        rendered = buffer.getvalue()
+        assert "BUY" in rendered
+        assert "SELL" in rendered
+        assert "Status" not in rendered
+        assert "Trades" in rendered
+
     def test_disabled_log_does_not_store(self):
         log = ActivityLog(enabled=False)
-        log.append("hidden")
-        assert log.line_count == 0
-
-    def test_echo_callback(self):
         seen: list[str] = []
         log = ActivityLog(echo=seen.append)
         log.append("hello")

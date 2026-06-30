@@ -17,6 +17,7 @@ from rich.text import Text
 from cli.activity_log import (
     ActivityLog,
     is_live_display_tty,
+    is_trade_activity_message,
     make_backtest_callbacks,
 )
 from cli.keyboard_input import (
@@ -71,7 +72,8 @@ from tradingagents.simulator.paper_journal import (
 console = Console()
 
 PAPER_CONTROLS_TEXT = (
-    "(↑↓ scroll log · s) settings · (m) movers · (c) close & retest · (r) reanalyze · (q) quit"
+    "(↑↓ scroll · t) trades · (s) settings · (m) movers · "
+    "(c) close & retest · (r) reanalyze · (q) quit"
 )
 MOVERS_CONTROLS_TEXT = (
     "(1–9) switch pair · (f) refresh · (m/esc) close movers"
@@ -480,9 +482,8 @@ def run_paper_session(
             log.append(message)
             if not message:
                 return
-            upper = message.upper()
             lowered = message.lower()
-            if any(token in upper for token in ("BUY", "SELL", "SHORT", "OPEN POSITION")):
+            if is_trade_activity_message(message):
                 PAPER_RUNTIME_LOGGER.info("Activity: %s", message)
             elif any(token in lowered for token in ("failed", "error", "crashed", "unavailable")):
                 PAPER_RUNTIME_LOGGER.warning("Activity: %s", message)
@@ -685,6 +686,16 @@ def run_paper_session(
                     settings_overlay.open()
                     log.append("Settings opened — esc to close")
                     _refresh_display()
+                return None
+            if key == "t" and not display_ctx.show_movers:
+                if settings_overlay.is_open:
+                    return None
+                trades_on = log.toggle_trades_filter()
+                if trades_on:
+                    log.append("Trades filter on — press (t) for full activity log")
+                else:
+                    log.append("Full activity log restored")
+                _refresh_display()
                 return None
             if key == "c":
                 if action_state["running"]:

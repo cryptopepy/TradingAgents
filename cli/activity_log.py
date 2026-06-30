@@ -28,6 +28,7 @@ from tradingagents.simulator.activity_messages import (
 __all__ = [
     "ActivityLog",
     "clip_activity_message",
+    "is_trade_activity_message",
     "format_drawdown_rebacktest_banner",
     "format_horizon_complete",
     "format_horizon_skipped",
@@ -54,6 +55,19 @@ def clip_activity_message(message: str, max_width: int) -> str:
 def is_live_display_tty() -> bool:
     """True when stdout is a TTY and live Rich panels are safe."""
     return sys.stdout.isatty()
+
+
+def is_trade_activity_message(message: str) -> bool:
+    """True for executed BUY/SELL/SHORT lines in the activity log."""
+    if not message:
+        return False
+    upper = message.upper()
+    if upper.startswith("OPEN POSITION —"):
+        return True
+    return any(
+        upper.startswith(prefix)
+        for prefix in ("BUY —", "SELL —", "SHORT —")
+    )
 
 
 def _scrollbar_thumb_row(visible_lines: int, *, start: int, total: int) -> list[int]:
@@ -87,6 +101,7 @@ class ActivityLog:
         self._on_change = on_change
         self._scroll_offset = 0  # lines up from the bottom (0 = newest)
         self._follow_tail = True
+        self._trades_only = False
 
     def append(self, message: str) -> None:
         if not self.enabled or not message:
@@ -116,6 +131,16 @@ class ActivityLog:
     def following_tail(self) -> bool:
         return self._follow_tail
 
+    @property
+    def trades_only(self) -> bool:
+        return self._trades_only
+
+    def toggle_trades_filter(self) -> bool:
+        """Show only BUY/SELL/SHORT lines; press again to restore full log."""
+        self._trades_only = not self._trades_only
+        self.scroll_to_bottom()
+        return self._trades_only
+
     def set_max_lines(self, max_lines: int) -> None:
         """Resize stored history (visible viewport unchanged)."""
         cap = max(10, int(max_lines))
@@ -123,10 +148,11 @@ class ActivityLog:
 
     def scroll_up(self, lines: int = 1) -> None:
         """Scroll toward older messages."""
-        if not self._lines:
+        active = self._active_lines()
+        if not active:
             return
         self._follow_tail = False
-        max_offset = max(0, len(self._lines) - 1)
+        max_offset = max(0, len(active) - 1)
         self._scroll_offset = min(self._scroll_offset + max(1, lines), max_offset)
 
     def scroll_down(self, lines: int = 1) -> None:
@@ -139,13 +165,20 @@ class ActivityLog:
         self._scroll_offset = 0
         self._follow_tail = True
 
+    def _active_lines(self) -> list[tuple[str, str]]:
+        lines = list(self._lines)
+        if not self._trades_only:
+            return lines
+        return [(ts, msg) for ts, msg in lines if is_trade_activity_message(msg)]
+
     def _visible_window(self, visible_lines: int) -> tuple[list[tuple[str, str]], int]:
-        total = len(self._lines)
+        active = self._active_lines()
+        total = len(active)
         if total == 0:
             return [], 0
         end = total - self._scroll_offset
         start = max(0, end - visible_lines)
-        return list(self._lines)[start:end], start
+        return active[start:end], start
 
     def render_panel(
         self,
@@ -159,14 +192,19 @@ class ActivityLog:
             visible_lines = 11
         text_width = max(20, (max_width or 72) - 2)
         window, start = self._visible_window(visible_lines)
-        total = len(self._lines)
+        total = len(self._active_lines())
         thumb_rows = _scrollbar_thumb_row(
             visible_lines, start=start, total=total
         )
         scrollable = total > visible_lines
 
-        if not self._lines:
-            body: Table | Text = Text("Waiting for events…", style="dim italic")
+        if total == 0:
+            if self._trades_only:
+                body = Text("No trades logged yet…", style="dim italic")
+            else:
+                body = Text("Waiting for events…", style="dim italic")
+        elif not self._lines:
+            body = Text("Waiting for events…", style="dim italic")
         else:
             table = Table(
                 show_header=False,
@@ -199,7 +237,11 @@ class ActivityLog:
             body = table
 
         panel_title = title
-        if self._scroll_offset > 0:
+        if self._trades_only:
+            panel_title = f"{title} — Trades ({total})"
+            if self._scroll_offset > 0:
+                panel_title += f" ↑{self._scroll_offset}"
+        elif self._scroll_offset > 0:
             panel_title = f"{title} ↑{self._scroll_offset}"
 
         panel_kwargs: dict = {"title": panel_title, "border_style": "blue"}
