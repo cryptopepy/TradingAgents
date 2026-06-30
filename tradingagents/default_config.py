@@ -86,6 +86,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_OHLCV_CACHE_DIR": "ohlcv_cache_dir",
     "TRADINGAGENTS_VISUAL_BACKTEST_PRICE_SAMPLE_LINES": "visual_backtest_price_sample_lines",
     "TRADINGAGENTS_VISUAL_BACKTEST_UI_HZ": "visual_backtest_ui_hz",
+    "TRADINGAGENTS_SMART_TRADING_ENABLED": "smart_trading_enabled",
+    "TRADINGAGENTS_SMART_TRADING_CADENCE": "smart_trading_cadence",
+    "TRADINGAGENTS_SMART_TRADING_RISK": "smart_trading_risk",
+    "TRADINGAGENTS_SMART_TRADING_TRAILING_SL_ACTIVATION_PCT": "smart_trading_trailing_sl_activation_pct",
+    "TRADINGAGENTS_SMART_TRADING_PARTIAL_TP_RATIO": "smart_trading_partial_tp_ratio",
 }
 
 
@@ -235,6 +240,12 @@ _BASE_CONFIG = {
     "ohlcv_cache_dir": None,
     "visual_backtest_price_sample_lines": 12,
     "visual_backtest_ui_hz": 8,
+    # Smart Trading — two-axis cadence/risk modulation (key g in paper TUI)
+    "smart_trading_enabled": False,
+    "smart_trading_cadence": "swing",
+    "smart_trading_risk": "moderate",
+    "smart_trading_trailing_sl_activation_pct": 0.003,
+    "smart_trading_partial_tp_ratio": 0.5,
     # Autonomous re-optimization (aliases used by adaptive monitor + CLI prompts)
     "drawdown_time_window_minutes": 60,
     "drawdown_max_lookback_minutes": 60,

@@ -15,7 +15,7 @@ from tradingagents.backtest import (
     compute_strategy_signal,
     optimize_strategies,
 )
-from tradingagents.backtest.engine import _last_closed_bar_dt
+from tradingagents.backtest.engine import _last_closed_bar_dt, fetch_historical_crypto
 from tradingagents.backtest.matcher import SimulatedMatcher
 from tradingagents.backtest.portfolio import Direction, TransactionIntent, VirtualPortfolio
 from tradingagents.dataflows.config import get_config
@@ -41,7 +41,10 @@ from tradingagents.simulator.persistence import (
     save_paper_session,
 )
 from tradingagents.logging_setup import PAPER_RUNTIME_LOGGER, resolve_paper_logs_dir
-from tradingagents.simulator.paper_journal import journal_trade
+from tradingagents.simulator.paper_journal import journal_note, journal_trade
+from tradingagents.simulator.smart_trading.guards import should_force_liquidation_exit
+from tradingagents.simulator.smart_trading.runtime import SmartTradingRuntime
+from tradingagents.simulator.smart_trading.tick_eval import evaluate_smart_market_tick
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,13 @@ class PaperTradingState:
     position_entry_price: Optional[float] = None
     position_side: Optional[str] = None
     leverage: float = 1.0
+    smart_trading_enabled: bool = False
+    smart_trading_cadence: str = "swing"
+    smart_trading_risk: str = "moderate"
+    smart_trading_summary: str = ""
+    daily_trade_count: int = 0
+    atr_rank_pct: float = 0.0
+    break_even_pct: Optional[float] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -132,6 +142,12 @@ class PaperTradingEngine:
         self._price_feed_logged = False
         self._last_logged_spike_tuning: str = ""
         self._last_heartbeat_at: float = 0.0
+        self._smart = SmartTradingRuntime(self.config)
+        pending = getattr(self, "_pending_smart_guards", None)
+        if pending:
+            self._smart.guards.daily_trade_count = pending["daily_trade_count"]
+            self._smart.guards.daily_reset_date = pending["daily_reset_date"]
+            self._smart.guards.consecutive_losses = pending["consecutive_losses"]
 
         review_minutes = float(
             self.config.get(
@@ -317,11 +333,18 @@ class PaperTradingEngine:
 
     def refresh_signal(self, *, force: bool = False) -> StrategySignal:
         """Recompute strategy signal when a new OHLCV bar has closed."""
-        lb = (
-            self.session.lookback
-            if isinstance(self.session.lookback, LookbackWindow)
-            else LookbackWindow(str(self.session.lookback))
+        lev = float(self.session.leverage or 1.0)
+        effective = self._smart.resolve(lev)
+        lb_value = (
+            effective.signal_lookback
+            if effective.enabled
+            else (
+                self.session.lookback
+                if isinstance(self.session.lookback, LookbackWindow)
+                else str(self.session.lookback)
+            )
         )
+        lb = lb_value if isinstance(lb_value, LookbackWindow) else LookbackWindow(str(lb_value))
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         bar_open = _last_closed_bar_dt(now, lb.granularity_seconds())
         if not force and self._last_signal_bar == bar_open:
@@ -330,15 +353,38 @@ class PaperTradingEngine:
         prior_signal = self.session.signal
 
         delays = DEFAULT_API_RETRY_DELAYS
+        params = self._smart.adjust_parameters(
+            self.session.strategy_name,
+            self.session.parameters,
+            effective,
+        )
+        signal_config = dict(self.config)
+        if effective.enabled:
+            signal_config.update(effective.to_filter_config(self.config))
 
         def _load_signal() -> str:
-            return compute_strategy_signal(
+            end = datetime.now().strftime("%Y-%m-%d")
+            try:
+                df = fetch_historical_crypto(self.session.symbol, end, lb, config=self.config)
+            except Exception:
+                df = None
+            if effective.enabled and df is not None and not df.empty:
+                self._smart.update_atr_from_df(df)
+                effective_local = self._smart.resolve(lev)
+            else:
+                effective_local = effective
+            raw = compute_strategy_signal(
                 self.session.symbol,
                 self.session.strategy_name,
-                self.session.parameters,
-                self.session.lookback,
-                config=self.config,
+                params,
+                lb,
+                config=signal_config,
             )
+            if effective_local.enabled and df is not None and not df.empty:
+                sig = StrategySignal.from_string(raw)
+                sig = self._smart.momentum_override(df, sig, effective_local, lev)
+                return sig.value
+            return raw
 
         def _on_retry(attempt: int, wait: float, exc: Exception) -> None:
             self._emit_activity(
@@ -394,6 +440,108 @@ class PaperTradingEngine:
                 self._pending_last_drawdown_review_at = parsed
             except ValueError:
                 logger.warning("Ignoring invalid last_drawdown_review_at: %s", last_review)
+        smart_extra = extra.get("smart_trading") or {}
+        if smart_extra:
+            self.config["smart_trading_enabled"] = bool(smart_extra.get("enabled", False))
+            self.config["smart_trading_cadence"] = str(smart_extra.get("cadence", "swing"))
+            self.config["smart_trading_risk"] = str(smart_extra.get("risk", "moderate"))
+            self._pending_smart_guards = {
+                "daily_trade_count": int(smart_extra.get("daily_trade_count", 0)),
+                "daily_reset_date": str(smart_extra.get("daily_reset_date", "")),
+                "consecutive_losses": int(smart_extra.get("consecutive_losses", 0)),
+            }
+        else:
+            self._pending_smart_guards = None
+
+    def apply_smart_trading(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        cadence: Optional[str] = None,
+        risk: Optional[str] = None,
+        validate: bool = True,
+    ) -> str:
+        """Apply smart-trading cadence/risk; optional walk-forward validation."""
+        prior_enabled = bool(self.config.get("smart_trading_enabled", False))
+        prior_cadence = str(self.config.get("smart_trading_cadence", "swing"))
+        if enabled is not None:
+            self.config["smart_trading_enabled"] = bool(enabled)
+        if cadence is not None:
+            self.config["smart_trading_cadence"] = str(cadence).strip().lower()
+        if risk is not None:
+            self.config["smart_trading_risk"] = str(risk).strip().lower()
+
+        lev = float(self.session.leverage or 1.0)
+        effective = self._smart.resolve(lev)
+        message = self._smart.summary_line(effective)
+
+        cadence_changed = (
+            prior_cadence != self.config.get("smart_trading_cadence")
+            or prior_enabled != bool(self.config.get("smart_trading_enabled"))
+        )
+        if validate and effective.enabled and cadence_changed:
+            wf = self._smart.validate_cadence_change(
+                self.session.symbol,
+                self.session.strategy_name,
+                self.session.parameters,
+                effective,
+            )
+            self._emit_activity(wf.message)
+            if not wf.ok:
+                self.config["smart_trading_enabled"] = prior_enabled
+                self.config["smart_trading_cadence"] = prior_cadence
+                return f"Cadence rejected — {wf.message}"
+
+        if effective.enabled:
+            self.session.stop_loss_pct = effective.stop_loss_pct
+            self.session.take_profit_pct = effective.take_profit_pct
+            self.session.position_size_pct = effective.position_size_pct
+            self._emit_activity(f"Smart Trading: {message}")
+            journal_note(
+                f"smart_trading cadence={effective.cadence} risk={effective.risk}",
+            )
+            if effective.adaptive_resolved_cadence:
+                self._maybe_suggest_cadence(effective)
+        else:
+            self._emit_activity("Smart Trading disabled")
+
+        self.refresh_signal(force=True)
+        return message
+
+    def _maybe_suggest_cadence(self, effective) -> None:
+        rank = self._smart._last_atr_percentile
+        if rank < 0.20 and effective.cadence == "adaptive":
+            self._emit_activity("Low volatility — consider Swing cadence")
+        elif rank > 0.60 and effective.cadence == "adaptive":
+            self._emit_activity("High volatility — Scalp cadence active")
+
+    def _stamp_entry_atr(self, effective) -> None:
+        pos = self.portfolio.positions.get(self.session.symbol)
+        if pos is None:
+            return
+        if "entry_atr_pct" not in pos:
+            pos["entry_atr_pct"] = effective.atr_pct
+            pos["base_sl_pct"] = effective.stop_loss_pct
+            pos["active_sl_pct"] = effective.stop_loss_pct
+
+    def _update_smart_guards_after_tick(self, result: TickEvaluationResult, effective) -> None:
+        if not effective.enabled:
+            return
+        now = result.timestamp
+        action = result.action_taken
+        if action in ("enter_long", "enter_short"):
+            self._smart.guards.record_entry(now)
+            self._stamp_entry_atr(effective)
+        elif action in ("stop_loss_exit", "trailing_stop_exit"):
+            self._smart.guards.record_exit(now, was_stop_loss=True, was_profitable=False)
+            if self._smart.guards.consecutive_losses >= effective.consecutive_loss_limit:
+                self._smart.guards.halt(now, effective.loss_cooldown_minutes, "Loss streak cooldown")
+                self._signals_halted = True
+                self._emit_activity(self._smart.guards.halt_reason)
+        elif action in ("take_profit_exit", "partial_take_profit"):
+            self._smart.guards.record_exit(now, was_stop_loss=False, was_profitable=True)
+        elif action == "signal_exit":
+            self._smart.guards.record_exit(now, was_stop_loss=False, was_profitable=False)
 
     def _persist_session(self, quote: LivePrice) -> None:
         if not self.config.get("paper_state_persistence", True):
@@ -413,6 +561,14 @@ class PaperTradingEngine:
                     if self._adaptive.last_drawdown_review_at is not None
                     else None
                 ),
+                "smart_trading": {
+                    "enabled": bool(self.config.get("smart_trading_enabled", False)),
+                    "cadence": str(self.config.get("smart_trading_cadence", "swing")),
+                    "risk": str(self.config.get("smart_trading_risk", "moderate")),
+                    "daily_trade_count": self._smart.guards.daily_trade_count,
+                    "daily_reset_date": self._smart.guards.daily_reset_date,
+                    "consecutive_losses": self._smart.guards.consecutive_losses,
+                },
             },
             config=self.config,
         )
@@ -543,27 +699,78 @@ class PaperTradingEngine:
             if quote is None:
                 return self._tick_feed_unavailable()
             self._log_price_feed(quote)
+            lev = float(self.session.leverage or 1.0)
+            effective = self._smart.resolve(lev)
+            self._smart.record_price(quote.price)
+
+            if effective.enabled:
+                liq_reason = should_force_liquidation_exit(
+                    self.portfolio, self.session.symbol, quote.price, effective
+                )
+                if liq_reason:
+                    from tradingagents.backtest.portfolio import Direction, TransactionIntent
+
+                    now = datetime.now(timezone.utc)
+                    self.matcher.submit_intent(
+                        TransactionIntent(
+                            timestamp=now,
+                            asset=self.session.symbol,
+                            direction=Direction.EXIT,
+                        ),
+                        reference_price=quote.price,
+                    )
+                    self._smart.guards.halt(now, 15.0, liq_reason)
+                    self._signals_halted = True
+                    self._emit_activity(f"Liquidation guard — forced exit ({liq_reason})")
+
+            halted = self._signals_halted or self._smart.guards.is_halted(datetime.now(timezone.utc))
             signal = (
                 self.refresh_signal()
-                if not self._signals_halted and not self._feed_unavailable
+                if not halted and not self._feed_unavailable
                 else StrategySignal.FLAT
             )
-            result = evaluate_live_market_tick(
+
+            entry_allowed = True
+            block_reason = ""
+            sizing = float(
+                self.session.position_size_pct
+                if self.session.position_size_pct != 1.0
+                else self.config.get("position_size_pct", 1.0)
+            )
+            if effective.enabled:
+                entry_allowed, block_reason, sizing = self._smart.check_entry_allowed(
+                    self.portfolio,
+                    self.session.symbol,
+                    quote.price,
+                    effective,
+                    datetime.now(timezone.utc),
+                )
+                sl_pct = effective.stop_loss_pct
+                tp_pct = effective.take_profit_pct
+            else:
+                sl_pct = self.session.stop_loss_pct
+                tp_pct = self.session.take_profit_pct
+
+            result = evaluate_smart_market_tick(
                 self.portfolio,
                 quote.price,
                 signal,
                 asset=self.session.symbol,
                 matcher=self.matcher,
-                stop_loss_pct=self.session.stop_loss_pct,
-                take_profit_pct=self.session.take_profit_pct,
+                effective=effective,
                 slippage_bps=self.session.slippage_bps,
-                sizing_pct=float(
-                    self.session.position_size_pct
-                    if self.session.position_size_pct != 1.0
-                    else self.config.get("position_size_pct", 1.0)
-                ),
-                leverage=float(self.session.leverage or 1.0),
+                sizing_pct=sizing,
+                leverage=lev,
+                bar_high=self._smart._bar_high if effective.intra_bar_sl_tp else None,
+                bar_low=self._smart._bar_low if effective.intra_bar_sl_tp else None,
+                entry_allowed=entry_allowed,
+                block_reason=block_reason,
             )
+            if block_reason and not entry_allowed and signal != StrategySignal.FLAT:
+                if result.action_taken == "hold":
+                    self._emit_activity(f"Entry blocked — {block_reason}")
+
+            self._update_smart_guards_after_tick(result, effective)
             self._tick_history.append(result)
             self._log_tick_action(result)
             self._record_equity_samples(result.portfolio_equity, result.timestamp)
@@ -1074,9 +1281,16 @@ class PaperTradingEngine:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         spike_status = self._spike_monitor.status(now)
-        take_profit = self.session.take_profit_pct
-        if take_profit is None:
-            take_profit = self.session.stop_loss_pct * 2.0
+        lev = float(self.session.leverage or 1.0)
+        effective = self._smart.resolve(lev)
+        if effective.enabled:
+            take_profit = effective.take_profit_pct
+            stop_loss_display = effective.stop_loss_pct
+        else:
+            take_profit = self.session.take_profit_pct
+            stop_loss_display = self.session.stop_loss_pct
+            if take_profit is None:
+                take_profit = self.session.stop_loss_pct * 2.0
         return PaperTradingState(
             symbol=self.session.symbol,
             strategy_name=self.session.strategy_name,
@@ -1113,12 +1327,22 @@ class PaperTradingEngine:
                     self.config.get("paper_loss_threshold_pct", 5.0),
                 )
             ),
-            stop_loss_pct=float(self.session.stop_loss_pct),
+            stop_loss_pct=float(stop_loss_display),
             take_profit_pct=take_profit,
             leverage=float(self.session.leverage or 1.0),
             open_position=pos_desc,
             position_entry_price=pos_entry,
             position_side=pos_side,
+            smart_trading_enabled=bool(self.config.get("smart_trading_enabled", False)),
+            smart_trading_cadence=str(self.config.get("smart_trading_cadence", "swing")),
+            smart_trading_risk=str(self.config.get("smart_trading_risk", "moderate")),
+            smart_trading_summary=self._smart.summary_line(effective),
+            daily_trade_count=self._smart.guards.daily_trade_count,
+            atr_rank_pct=self._smart._last_atr_percentile * 100.0,
+            break_even_pct=self._smart.break_even_pct(
+                float(self.session.slippage_bps),
+                float(self.session.leverage or 1.0),
+            ) if pos_desc else None,
         )
 
     def run_loop(

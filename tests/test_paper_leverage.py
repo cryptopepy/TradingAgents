@@ -241,3 +241,58 @@ class TestPaperEngineLeverage:
         pos = engine.portfolio.positions["BTC/USDT"]
         assert pos["leverage"] == pytest.approx(4.0)
         assert pos["size"] * pos["entry_price"] == pytest.approx(40_000.0, rel=1e-4)
+
+
+@pytest.mark.unit
+class TestSmartTradingLeverage:
+    def test_scalp_moderate_3x_exits_on_smaller_move(self):
+        from tradingagents.default_config import DEFAULT_CONFIG
+        from tradingagents.simulator.smart_trading.resolver import resolve_effective_config
+        from tradingagents.simulator.smart_trading.tick_eval import evaluate_smart_market_tick
+
+        session = PaperTradingSession(
+            symbol="BTC/USDT",
+            strategy_name="ema_crossover",
+            signal=StrategySignal.FLAT,
+            initial_equity=10_000.0,
+            leverage=3.0,
+            slippage_bps=0.0,
+        )
+        cfg = {
+            **DEFAULT_CONFIG,
+            "paper_fresh_start": True,
+            "paper_state_persistence": False,
+            "smart_trading_enabled": True,
+            "smart_trading_cadence": "scalp",
+            "smart_trading_risk": "moderate",
+        }
+        engine = PaperTradingEngine(session, cfg, adaptive_enabled=False)
+        engine._smart._last_atr_pct = 0.004  # ~0.4% ATR
+        eff = resolve_effective_config(cfg, leverage=3.0, atr_pct=0.004, cadence="scalp", risk="moderate")
+        assert eff.stop_loss_pct < 0.02
+
+        portfolio = engine.portfolio
+        matcher = engine.matcher
+        evaluate_smart_market_tick(
+            portfolio,
+            50_000.0,
+            StrategySignal.LONG,
+            asset="BTC/USDT",
+            matcher=matcher,
+            effective=eff,
+            sizing_pct=eff.position_size_pct,
+            leverage=3.0,
+        )
+        drop_price = 50_000.0 * (1.0 - eff.stop_loss_pct - 0.001)
+        result = evaluate_smart_market_tick(
+            portfolio,
+            drop_price,
+            StrategySignal.FLAT,
+            asset="BTC/USDT",
+            matcher=matcher,
+            effective=eff,
+            leverage=3.0,
+            bar_high=50_000.0,
+            bar_low=drop_price,
+        )
+        assert result.stop_loss_triggered or result.action_taken == "stop_loss_exit"

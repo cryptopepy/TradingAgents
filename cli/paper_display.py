@@ -212,6 +212,7 @@ class PaperDisplayContext:
     status_prompt: Optional[str] = None
     busy_label: Optional[str] = None
     settings: Optional[object] = None  # SettingsOverlay when open
+    smart_trading: Optional[object] = None  # SmartTradingOverlay when open
 
 
 def render_market_panel(

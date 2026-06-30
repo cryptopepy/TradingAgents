@@ -147,21 +147,47 @@ def apply_min_edge_filter(
     return out
 
 
+def apply_signal_confirm_bars(signals: pd.Series, confirm_bars: int) -> pd.Series:
+    """Require N consecutive bars in same direction before entry."""
+    if confirm_bars <= 0:
+        return signals
+    out = signals.copy()
+    streak = 0
+    last_dir = 0
+    for i in range(len(out)):
+        target = int(out.iloc[i]) if pd.notna(out.iloc[i]) else 0
+        if target == 0:
+            streak = 0
+            last_dir = 0
+            continue
+        if target == last_dir:
+            streak += 1
+        else:
+            streak = 1
+            last_dir = target
+        if streak < confirm_bars:
+            out.iloc[i] = 0
+    return out
+
+
 def prepare_strategy_signals(
     df: pd.DataFrame,
     strategy_name: str,
     signals: pd.Series,
     config: Optional[dict] = None,
 ) -> pd.Series:
-    """Apply regime filter, min-edge gate, and trade cooldown."""
+    """Apply regime filter, min-edge gate, confirm bars, and trade cooldown."""
     cfg = config or {}
     filtered = apply_regime_filter(
         df,
         signals,
         strategy_name,
         enabled=bool(cfg.get("regime_filter_enabled")),
+        adx_trend_threshold=float(cfg.get("adx_trend_threshold", 25.0)),
+        adx_chop_threshold=float(cfg.get("adx_chop_threshold", 20.0)),
     )
     filtered = apply_min_edge_filter(df, filtered, cfg)
+    filtered = apply_signal_confirm_bars(filtered, int(cfg.get("signal_confirm_bars", 0)))
     return apply_trade_cooldown(
         filtered,
         int(cfg.get("min_bars_between_trades", 0)),

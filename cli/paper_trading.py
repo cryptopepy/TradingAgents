@@ -32,6 +32,7 @@ from cli.keyboard_input import (
 from cli.tui.panes.paper_pane import PaperPane
 from cli.tui.panes.visual_backtest_pane import VisualBacktestPane
 from cli.tui.settings import SettingsContext, SettingsOverlay, register_paper_settings
+from cli.tui.overlays.smart_trading import SmartTradingContext, SmartTradingOverlay
 from cli.tui.workspace import WorkspaceManager
 from cli.movers_board import MoversBoard
 from cli.paper_display import (
@@ -75,7 +76,7 @@ from tradingagents.simulator.paper_journal import (
 console = Console()
 
 PAPER_CONTROLS_TEXT = (
-    "(↑↓ scroll · t) trades · (s) settings · (m) movers · "
+    "(↑↓ scroll · t) trades · (s) settings · (g) smart · (m) movers · "
     "(c) close & retest · (r) reanalyze · (q) quit"
 )
 MOVERS_CONTROLS_TEXT = (
@@ -143,6 +144,18 @@ def render_paper_state_table(
     else:
         table.add_row("Fast-move review", "off")
     table.add_row("Position", state.open_position or "flat")
+    if state.open_position and state.break_even_pct is not None:
+        table.add_row("Break-even", f"+{state.break_even_pct:.3f}% (fees)")
+    if state.smart_trading_enabled or state.smart_trading_summary:
+        table.add_row(
+            "Smart Trading",
+            clip_cell(
+                state.smart_trading_summary
+                or f"{state.smart_trading_cadence}/{state.smart_trading_risk}",
+                value_w,
+            ),
+        )
+        table.add_row("Trades today", str(state.daily_trade_count))
     table.add_row("Adaptive re-tests", str(state.rebacktest_count))
     return table
 
@@ -175,6 +188,12 @@ def render_paper_live_display(
     full_width = max(60, term_w - 2)
 
     settings = getattr(ctx, "settings", None)
+    smart = getattr(ctx, "smart_trading", None)
+    if smart is not None and getattr(smart, "is_open", False):
+        return Group(
+            smart.render_panel(width=full_width),
+            _render_footer_controls(ctx),
+        )
     if settings is not None and getattr(settings, "is_open", False):
         return Group(
             settings.render_panel(width=full_width),
@@ -244,6 +263,9 @@ def _render_footer_controls(ctx: PaperDisplayContext) -> Text:
         return Text(f"⏳ {ctx.busy_label} — please wait", style="bold cyan")
     if ctx.status_prompt:
         return Text(ctx.status_prompt, style="bold yellow")
+    smart = getattr(ctx, "smart_trading", None)
+    if smart is not None and getattr(smart, "is_open", False):
+        return Text(smart.footer_hint(), style="dim")
     settings = getattr(ctx, "settings", None)
     if settings is not None and getattr(settings, "is_open", False):
         return Text(settings.footer_hint(), style="dim")
@@ -365,7 +387,9 @@ def run_paper_session(
         ctx=SettingsContext(config=cfg, extras={}),
         title="Settings — Paper Trading",
     )
+    smart_overlay = SmartTradingOverlay(ctx=SmartTradingContext(config=cfg, extras={}))
     display_ctx.settings = settings_overlay
+    display_ctx.smart_trading = smart_overlay
     loop_clock: dict = {"next_tick_at": time.monotonic() + interval}
 
     def _record_price(state: PaperTradingState) -> None:
@@ -485,6 +509,13 @@ def run_paper_session(
         engine = PaperTradingEngine(session, cfg, adaptive_enabled=adaptive_on)
         engine_ref["engine"] = engine
         settings_overlay.ctx.extras.update(
+            {
+                "engine": engine,
+                "display_ctx": display_ctx,
+                "activity_log": log,
+            }
+        )
+        smart_overlay.ctx.extras.update(
             {
                 "engine": engine,
                 "display_ctx": display_ctx,
@@ -630,6 +661,7 @@ def run_paper_session(
         def _poll_key(timeout: float) -> Optional[str]:
             _flush_display_refresh()
             event = poll_stdin_event(timeout)
+            smart = getattr(display_ctx, "smart_trading", None)
             if workspace is not None and workspace.handle_pane_key(event):
                 _refresh_display()
                 return None
@@ -639,6 +671,10 @@ def run_paper_session(
                 return None
             if settings_overlay.is_open:
                 settings_overlay.handle_key(event)
+                _refresh_display()
+                return None
+            if smart is not None and smart.is_open:
+                smart.handle_key(event)
                 _refresh_display()
                 return None
             if event == SCROLL_UP:
@@ -704,12 +740,27 @@ def run_paper_session(
                     return None
             if key == "s" and not display_ctx.show_movers:
                 if not action_state["running"] and confirm_state["action"] is None:
+                    if smart is not None and smart.is_open:
+                        return None
                     settings_overlay.open()
                     log.append("Settings opened — esc to close")
                     _refresh_display()
                 return None
+            if key == "g" and not display_ctx.show_movers:
+                if not action_state["running"] and confirm_state["action"] is None:
+                    if settings_overlay.is_open:
+                        return None
+                    if smart is not None:
+                        if smart.is_open:
+                            smart.close()
+                            log.append("Smart Trading closed")
+                        else:
+                            smart.open()
+                            log.append("Smart Trading opened — (g) close")
+                        _refresh_display()
+                return None
             if key == "t" and not display_ctx.show_movers:
-                if settings_overlay.is_open:
+                if settings_overlay.is_open or (smart is not None and smart.is_open):
                     return None
                 trades_on = log.toggle_trades_filter()
                 if trades_on:
